@@ -60,22 +60,31 @@ for k, v in summary["compile"].items():
 def run_script(name: str):
     L = lupa53.LuaRuntime(unpack_returned_tuples=True)
     g = L.globals()
-    data_root = tempfile.mkdtemp(prefix="norns-data-")
+    data_root = tempfile.mkdtemp(prefix="nornsdata")
     # dust/code/ is the parent of the repo so that include("sonar/lib/x") resolves
     code_root = str(root.parent)
-    if root.name != "sonar":
-        # make a symlink farm so the folder is called sonar
-        code_root = tempfile.mkdtemp(prefix="norns-code-")
-        os.symlink(str(root), os.path.join(code_root, "sonar"))
-    g.NORNS_LUA = str(norns_lua)
-    g.CODE_ROOT = code_root
-    g.DATA_ROOT = data_root
+    # nb.lua uses _path.code inside a Lua pattern, so the code root must hold no
+    # pattern magic characters (the Z: path has '-'); on device it is /home/we/dust/code/
+    magic = set("^$()%.[]*+-?")
+    if root.name != "sonar" or any(c in magic for c in root.parent.as_posix()):
+        # link farm so the folder is called sonar under a clean path
+        code_root = tempfile.mkdtemp(prefix="nornscode")
+        link = os.path.join(code_root, "sonar")
+        if os.name == "nt":
+            import _winapi
+            _winapi.CreateJunction(str(root), link)  # no admin needed
+        else:
+            os.symlink(str(root), link)
+    # forward slashes: these strings are spliced into Lua source and paths
+    g.NORNS_LUA = norns_lua.as_posix()
+    g.CODE_ROOT = Path(code_root).as_posix()
+    g.DATA_ROOT = Path(data_root).as_posix()
     g.SCRIPT_NAME = name
     mock = L.execute(Path(root / "tools" / "norns_mock.lua").read_text(encoding="utf-8"))
     mock.verbose = args.verbose
     result = {"loaded": False, "init": False, "beats": 0, "error": None}
     try:
-        L.execute(f'dofile("{root}/{name}.lua")')
+        L.execute(f'dofile("{Path(code_root).as_posix()}/sonar/{name}.lua")')
         result["loaded"] = True
         result["engine_name"] = g.engine.name
         g.init()
@@ -110,6 +119,8 @@ def run_script(name: str):
     result["params"] = int(g.params.count) if g.params else 0
     errs = [s for s in (list(mock.log.prints.values()) if mock.log.prints else []) if "error" in s.lower()]
     result["error_prints"] = errs[:10]
+    if code_root != str(root.parent):
+        os.rmdir(os.path.join(code_root, "sonar"))  # removes the link only, never the repo
     return result
 
 for name in args.script.split(","):

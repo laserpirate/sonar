@@ -183,6 +183,12 @@ handlers["/sonar/play"] = function(args)
   if not on and all_notes_off then all_notes_off() end
 end
 
+-- /sonar/resend: rules + gen for both plants, active plant, page
+-- (a renderer that connects mid-show asks for the state it missed)
+handlers["/sonar/resend"] = function(args)
+  sonar_osc.resend()
+end
+
 -- /sonar/ping -> replies /sonar/pong to the sender
 handlers["/sonar/ping"] = function(args, from)
   if from and from[1] then

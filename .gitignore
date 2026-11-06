@@ -13,3 +13,4 @@ DECISIONS.md
 QUESTIONS.md
 PROGRESS.md
 SESSION_*.md
+tests/logs/e2e_results.json

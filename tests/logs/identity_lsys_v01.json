@@ -1,0 +1,35 @@
+{
+ "p01": {
+  "ok": true,
+  "gen": 2,
+  "sentence_match": true,
+  "segments_lua": 115,
+  "segments_js": 115,
+  "max_point_error_px": 4.8315010246824386e-05,
+  "notes_compared": 24,
+  "note_mismatches": [],
+  "lua_clock_error": ""
+ },
+ "p02": {
+  "ok": true,
+  "gen": 2,
+  "sentence_match": true,
+  "segments_lua": 64,
+  "segments_js": 64,
+  "max_point_error_px": 4.9371680429288745e-05,
+  "notes_compared": 24,
+  "note_mismatches": [],
+  "lua_clock_error": ""
+ },
+ "p04": {
+  "ok": true,
+  "gen": 2,
+  "sentence_match": true,
+  "segments_lua": 42,
+  "segments_js": 42,
+  "max_point_error_px": 2.5842204465220675e-05,
+  "notes_compared": 17,
+  "note_mismatches": [],
+  "lua_clock_error": ""
+ }
+}

@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>sonar</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jost:wght@400;500&display=swap">
+<style>
+  :root {
+    --black: #07090e;
+    --kodama: #3e466b;
+    --water: #2E4A8C;
+    --water-hi: #9FC8F0;
+    --ink: #d8e4f2;
+    --dim: #7d8aa6;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--black); color: var(--ink); overflow: hidden;
+    font: 18px/1.3 "Jost", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  #stage { position: fixed; inset: 0; display: grid; place-items: center; }
+  #c { display: block; image-rendering: pixelated; }
+  #hud { position: fixed; left: 0; right: 0; bottom: 0; display: flex; flex-wrap: wrap; gap: 8px 14px;
+    align-items: center; padding: 10px 16px; background: rgba(7, 9, 14, 0.86); border-top: 1px solid var(--kodama);
+    font-size: 18px; z-index: 10; }
+  #hud.hidden { display: none !important; }
+  #hud .word { font-weight: 500; letter-spacing: 0.04em; }
+  #hud .fact { color: var(--dim); font-variant-numeric: tabular-nums; }
+  #hud .fact b { color: var(--ink); font-weight: 500; }
+  #hud button { font: inherit; font-size: 18px; color: var(--ink); background: transparent; border: 1px solid var(--kodama);
+    border-radius: 0; padding: 4px 12px; cursor: pointer; min-height: 36px; }
+  #hud button:hover, #hud button:focus-visible { border-color: var(--water-hi); outline: none; }
+  #hud button.on { background: var(--water); border-color: var(--water); }
+  #hud label { display: inline-flex; gap: 6px; align-items: center; color: var(--dim); }
+  #hud input[type=range] { width: 120px; accent-color: var(--water-hi); }
+  #hud .spacer { flex: 1; }
+  #keys { position: fixed; right: 16px; bottom: 70px; z-index: 11; background: var(--black); border: 1px solid var(--kodama);
+    padding: 12px 16px; font-size: 18px; display: none; }
+  #keys.show { display: block; }
+  #keys table { border-collapse: collapse; }
+  #keys td { padding: 2px 12px 2px 0; }
+  #keys td:first-child { color: var(--water-hi); }
+  #panic { position: fixed; left: 16px; top: 16px; z-index: 12; font-size: 18px; color: var(--dim); display: none; }
+  #panic.show { display: block; }
+  /* blackout is a plain overlay above everything; it works whatever the canvas or MIDI does */
+  #blackout { position: fixed; inset: 0; background: #000; z-index: 1000; display: none; cursor: none; }
+  #blackout.on { display: block !important; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="1280" height="640" aria-label="sonar"></canvas></div>
+<div id="panic">panic · Esc hold 1 s to resume</div>
+<div id="hud">
+  <span class="word">sonar</span>
+  <span class="fact" id="f-src">sim</span>
+  <span class="fact" id="f-p1">1 <b>p13</b> g1/2</span>
+  <span class="fact" id="f-p2">2 <b>p13</b> g1/2</span>
+  <span class="fact" id="f-note">note <b>-</b></span>
+  <span class="fact" id="f-bpm"><b>90</b> bpm</span>
+  <span class="spacer"></span>
+  <button id="b-play" class="on" title="Space">play</button>
+  <button id="b-gen" title="N">next gen</button>
+  <button id="b-reset" title="R">reset</button>
+  <button id="b-mode" title="M">wall</button>
+  <button id="b-enable" title="enable audio and MIDI">enable</button>
+  <label>master <input id="r-master" type="range" min="0" max="1" step="0.01" value="0.7"></label>
+  <button id="b-keys" title="?">keys</button>
+</div>
+<div id="keys"><table>
+  <tr><td>Space</td><td>play</td></tr>
+  <tr><td>N</td><td>next gen</td></tr>
+  <tr><td>R</td><td>reset</td></tr>
+  <tr><td>1 2</td><td>plant</td></tr>
+  <tr><td>Left Right</td><td>preset</td></tr>
+  <tr><td>M</td><td>norns / wall</td></tr>
+  <tr><td>B</td><td>blackout</td></tr>
+  <tr><td>Esc hold 1 s</td><td>panic</td></tr>
+  <tr><td>H</td><td>hide controls</td></tr>
+  <tr><td>F</td><td>full screen</td></tr>
+  <tr><td>W S D</td><td>kodama phase (?kodama=1)</td></tr>
+</table></div>
+<div id="blackout"></div>
+<script>
+  // Blackout lives here, outside the app module: it works even if app.js,
+  // the canvas, audio or MIDI fails. Others register mute hooks on it.
+  (function () {
+    var el = document.getElementById("blackout");
+    var hooks = [];
+    window.sonarBlackout = {
+      on: false,
+      set: function (v) {
+        this.on = !!v;
+        el.classList.toggle("on", this.on);
+        for (var i = 0; i < hooks.length; i++) { try { hooks[i](this.on); } catch (e) {} }
+      },
+      toggle: function () { this.set(!this.on); },
+      hook: function (f) { hooks.push(f); }
+    };
+    window.addEventListener("keydown", function (e) {
+      if ((e.key === "b" || e.key === "B") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (!e.repeat) window.sonarBlackout.toggle();
+        e.preventDefault();
+      }
+    }, true);
+  })();
+</script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

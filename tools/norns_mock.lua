@@ -27,10 +27,28 @@ print = function(...)
   if M.verbose then real_print(...) end
 end
 
+-- Windows host: os.execute goes to cmd.exe, which knows no `mkdir -p`, no
+-- single quotes and no /dev/null. Translate mkdir; skip anything else (logged).
+M.windows = package.config:sub(1, 1) == "\\"
+if M.windows then
+  local real_execute = os.execute
+  os.execute = function(cmd)
+    if not cmd then return true end
+    local dir = cmd:match("^%s*mkdir%s+%-p%s+(.-)%s*$")
+    if dir then
+      dir = dir:gsub("^['\"]", ""):gsub("['\"]$", ""):gsub("/", "\\")
+      return real_execute('if not exist "' .. dir .. '" mkdir "' .. dir .. '"')
+    end
+    M.log.prints[#M.log.prints + 1] = "MOCK skipped os.execute on windows: " .. cmd
+    return nil
+  end
+end
+
 -- any _norns.* C binding is a no-op returning nil
 _norns = setmetatable({}, { __index = function() return function() end end })
 _norns.osc = {}
 _norns.execute = function(cmd)
+  if M.windows then return "" end
   -- io.popen is unavailable in lupa; route through a temp file
   local tmp = DATA_ROOT .. "/_exec.out"
   os.execute(cmd .. " > '" .. tmp .. "' 2>/dev/null")
