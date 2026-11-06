@@ -79,16 +79,33 @@ node tools/serve.mjs --port 8080
 | `index.html?ws=ws://127.0.0.1:8765` | live: draws what norns (or fake-norns) sends |
 | `&mode=norns` | 128 x 64 white on black at an integer scale (default `wall`) |
 | `&p1=2&p2=11` | presets for plant 1 and 2 (`p01..p13`, flora's catalog order) |
-| `&bpm=90` `&seed=3` | sim tempo and random seed |
+| `&bpm=90` `&seed=3` | sim tempo and seed. The seed picks the two presets and the random angles; the page writes the seed into the URL on every reseed, so a URL is a garden |
+| `&pitch=7` `&growth=2` `&key=48,major pentatonic` `&arp=up&arprate=1/16&arpoct=2` `&delay=0.3` | the controls row, preset from the URL |
 | `&engine=saw` / `rain` / `both` | browser engine after Enable |
 | `&liveaudio=1` | browser audio also in live mode (off: the norns makes the sound) |
 | `&shanshui=1` `&kodama=1` | landscape hooks, below |
 
-Keys: Space play, N next gen, R reset, 1 and 2 plant, Left and Right preset, M norns / wall, B blackout, Esc held 1 s panic (last good frame, audio muted; hold again to leave), H hide controls, F full screen, E engine, ? key list.
+Keys: Space play, N next gen, R reseed (live: reset), Shift+R reset, L add a loop, C clear loops, A arp mode, Up and Down bpm, 1 and 2 plant, Left and Right preset, M norns / wall, B blackout, Esc held 1 s panic (last good frame, audio muted; hold again to leave), H hide controls, F full screen, E engine, ? key list.
 
-Enable (click) starts audio and Web MIDI. Nothing asks for a device before that.
+### Garden controls (sim)
 
-MIDI default map (AV-STANDARD v02): note 36 play/pause, 37 next gen, 38 reset, 41 blackout, 42 panic; CC 1 BPM 40..160, CC 4 angle 0..120, CC 7 master. CCs use soft takeover. While blacked out only notes 41 and 42 act.
+`docs/js/garden.js` is the sim garden as one steppable object: the two base plants, the loop layers, the arpeggiator, key, pitch and growth. The page and the offline renders drive the same code.
+
+| control | what it does |
+| --- | --- |
+| reseed (R) | new seed: new presets for both plants (`seed % 13`), new random angles. Same seed, same garden. |
+| + loop (L) | a seeded loop layer: its own plant, recorded for one 4 bar loop from the next bar line, then repeated. Up to 4; the fifth replaces the oldest. Layers draw dimmer behind the base plants. |
+| clear (C) | removes every loop layer |
+| bpm | 20..300, beat phase kept; also sent to the norns in live mode (`/param/clock_tempo`) |
+| pitch | transpose -24..+24 semitones, everything the garden plays |
+| key | root (A1..C4) and scale (major, minor, dorian, phrygian, lydian, mixolydian, harmonic minor, major and minor pentatonic, whole tone): `musicutil.generate_scale_of_length` as flora builds its 24 note scale |
+| arp | mode off / up / down / updown / random, rate 1/4 1/8 1/8t 1/16, 1..3 octaves. The arpeggiator holds the last four distinct scale degrees the plants played and walks them on the beat grid with short saw notes. |
+| delay | a tempo-synced feedback delay on a send (dotted eighth, feedback 0.45, 2.4 kHz low-pass in the loop), 0..1 |
+| growth | 0 (off) or 1..8 bars per step: the active plant steps up a generation every N bars to its maximum, then back down |
+
+Enable (click) starts audio and Web MIDI. Nothing asks for a device before that. After Enable the strip shows the output level (`out -14 dB`) and, when the chain is running but nothing reaches the output for 2 s, a line saying to check the device mute switch, volume and output device.
+
+MIDI default map (AV-STANDARD v02): note 36 play/pause, 37 next gen, 38 reseed, 41 blackout, 42 panic; CC 1 BPM 40..160, CC 4 angle 0..120, CC 7 master. CCs use soft takeover. While blacked out only notes 41 and 42 act.
 
 ## Browser engines
 
@@ -106,6 +123,12 @@ MIDI default map (AV-STANDARD v02): note 36 play/pause, 37 next gen, 38 reset, 4
 | `rain_software-render_v01.mp3` | raindrops sequencer, one stereo delay standing in for softcut |
 | `score_shanshui_seed1792909998082_software-render_v01.mp3` | the score on the sim scroll, seed 1792909998082 (p09). WebAudio ports in an OfflineAudioContext (`tools/render_score.mjs`) |
 | `score_kodama_kc-01_software-render_v01.mp3` | the score on the sim kodama cycle (36 s), seed `kc-01` (p06) |
+| `garden_seed42_base_software-render_v01.mp3` | the garden at seed 42 (p04, p10), 90 bpm. `tools/render_garden.mjs` through `docs/js/garden-offline.js` |
+| `garden_seed42_loops4_delay030_software-render_v01.mp3` | seed 42 with four seeded 4 bar loops added at bars 2, 6, 10, 14, delay 0.30 |
+| `garden_seed42_arp-up-16_2oct_delay045_bpm100_software-render_v01.mp3` | arp up at 1/16 over 2 octaves, one loop at bar 4, delay 0.45, 100 bpm |
+| `garden_seed42_growth2_c3-major-pentatonic_arp-updown-8_software-render_v01.mp3` | growth every 2 bars, C3 major pentatonic, arp updown 1/8, one loop at bar 8, 84 bpm |
+
+`tools/render_garden_demos.sh` renders the four garden demos.
 
 ## Score
 

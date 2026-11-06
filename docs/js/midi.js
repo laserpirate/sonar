@@ -1,6 +1,6 @@
 // midi.js · Web MIDI in, AV-STANDARD v02 default map. Loaded only after Enable.
 //
-//   note 36 play/pause · 37 next gen · 38 reset · 41 blackout · 42 panic (toggle)
+//   note 36 play/pause · 37 next gen · 38 reseed · 41 blackout · 42 panic (toggle)
 //   CC 1 BPM 40..160 · CC 4 angle 0..120 deg (active plant) · CC 7 master
 //
 // Absolute CCs use soft takeover (pickup): a knob acts once it passes the
@@ -9,7 +9,7 @@
 // never reaches the keys, the blackout or the draw loop. Learn is later.
 
 export const DEFAULT_MAP = {
-  notes: { 36: "play", 37: "nextGen", 38: "reset", 41: "blackout", 42: "panic" },
+  notes: { 36: "play", 37: "nextGen", 38: "reseed", 41: "blackout", 42: "panic" },
   cc: { 1: "bpm", 4: "angle", 7: "master" },
 };
 
@@ -45,7 +45,7 @@ export async function initMidi({ S, act, setMaster, getMaster }) {
       if (S.blackoutOn && role !== "blackout" && role !== "panic") return; // while blacked out only these act
       if (role === "play") act.play();
       else if (role === "nextGen") act.nextGen();
-      else if (role === "reset") act.reset();
+      else if (role === "reseed") act.reseed();
       else if (role === "blackout") act.blackout();
       else if (role === "panic") act.panic();
     } else if (type === 0xb0) {

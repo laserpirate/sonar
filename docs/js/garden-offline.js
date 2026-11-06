@@ -1,0 +1,48 @@
+// garden-offline.js · render the sim garden (garden.js) through the player chain
+// (player.js) in an OfflineAudioContext. Browser only. Used by tests and by
+// tools/render_garden.mjs for the demo MP3s. A software render, not the norns.
+//
+// opts: {seed, seconds, sr, bpm, engine, delay, pitch, growth, key: [root, scale],
+//        arp: {mode, rate, octaves}, layers: [{seed, atBeat}], instr: [p1, p2],
+//        reseedAt: [{beat, seed}], fps}
+import { Garden } from "./garden.js";
+import { createChain } from "./player.js";
+import { makeRandom } from "./lsys.js";
+
+export async function renderGarden(catalog, opts = {}) {
+  const seconds = opts.seconds || 60, sr = opts.sr || 48000, bpm = opts.bpm || 90, fps = opts.fps || 60;
+  const ctx = new OfflineAudioContext(2, Math.ceil(sr * seconds), sr);
+  const C = createChain(ctx, { master: opts.master ?? 0.7, bpm, engine: opts.engine || "saw", random: makeRandom(0x5a3), rand: makeRandom(0x77) });
+  C.delay.setAmount(opts.delay || 0);
+  const G = new Garden({ catalog, seed: opts.seed ?? 1, instr: opts.instr });
+  if (opts.pitch) G.setPitch(opts.pitch);
+  if (opts.growth) G.setGrowth(opts.growth);
+  if (opts.key) G.setKey(opts.key[0], opts.key[1]);
+  if (opts.arp) G.setArp(opts.arp);
+  const layers = (opts.layers || []).slice().sort((a, b) => a.atBeat - b.atBeat);
+  const reseeds = (opts.reseedAt || []).slice().sort((a, b) => a.beat - b.beat);
+  const bps = bpm / 60;
+  const log = [];
+  let frame = 0;
+  const dt = 1 / fps;
+  // drive the garden to audio time `until` (seconds), scheduling notes at their beat time
+  const drive = (until) => {
+    while ((frame + 1) * dt <= until + 1e-9) {
+      frame++;
+      const now = frame * dt * bps;
+      while (layers.length && layers[0].atBeat <= now) { const L = layers.shift(); G.addLayer(L.seed, now); log.push({ k: "layer", t: now, seed: L.seed }); }
+      while (reseeds.length && reseeds[0].beat <= now) { const r = reseeds.shift(); G.seed(r.seed); log.push({ k: "reseed", t: now, seed: r.seed }); }
+      for (const ev of G.step(now)) {
+        const when = ev.t / bps;
+        C.playNote(ev, bpm, Math.max(when, frame * dt));
+        log.push({ k: ev.arp ? "arp" : ev.layer ? "loop" : "note", t: ev.t, note: ev.note, plant: ev.plant });
+      }
+    }
+  };
+  for (let s = 1; s < seconds; s++) ctx.suspend(s).then(() => { drive(s + 1); ctx.resume(); });
+  drive(1);
+  const buf = await ctx.startRendering();
+  return { buf, log, state: G.state() };
+}
+
+export { levels, pcm16base64 } from "./score-offline.js";

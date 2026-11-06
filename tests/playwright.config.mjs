@@ -10,7 +10,7 @@ export default defineConfig({
   workers: 1,
   reporter: [["list"], ["json", { outputFile: "logs/e2e_results.json" }]],
   use: {
-    channel: "chrome",
+    channel: process.env.PW_CHANNEL === undefined ? "chrome" : (process.env.PW_CHANNEL || undefined), // PW_CHANNEL="" uses the bundled Chromium
     headless: true,
     launchOptions: { args: ["--autoplay-policy=no-user-gesture-required"] },
     viewport: { width: 1280, height: 720 },

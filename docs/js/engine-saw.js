@@ -94,7 +94,9 @@ export class SawEngine {
   setEnv(levels, times, curves) { this.p.env_levels = levels.slice(); this.p.env_times = times.slice(); this.p.env_curves = curves.slice(); }
 
   // flora: engine.note_on(note_to_play, freq, random_note_frequency)
-  noteOn(id, cf, frequency, when) {
+  // envScale (optional): multiply the envelope times, for the arpeggiator's short notes
+  // ampScale (optional): multiply the voice amp, for loop layers and the arpeggiator
+  noteOn(id, cf, frequency, when, envScale = 1, ampScale = 1) {
     const ctx = this.ctx, p = this.p, r = this.random;
     const t0 = Math.max(ctx.currentTime, when ?? ctx.currentTime);
     if (frequency < 0.2) frequency = 0.2;
@@ -103,13 +105,14 @@ export class SawEngine {
     if (!steal && this.voices.length >= MAX_VOICES) steal = this.voices[this.voices.length - 1];
     if (steal) this.kill(steal, t0);
 
-    const { curve, dur } = envelopeCurve(p.env_times, p.env_levels, p.env_curves);
+    const times = envScale === 1 ? p.env_times : p.env_times.map((x) => x * envScale);
+    const { curve, dur } = envelopeCurve(times, p.env_levels, p.env_curves);
     const end = t0 + dur + 0.05;
     const vca = ctx.createGain();
     vca.gain.value = 0;
     vca.gain.setValueCurveAtTime(curve, t0, dur);
     const amp = ctx.createGain();
-    amp.gain.value = p.amp;
+    amp.gain.value = p.amp * ampScale;
     const merger = ctx.createChannelMerger(2);
     merger.connect(amp).connect(vca).connect(this.out);
 

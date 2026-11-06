@@ -35,6 +35,14 @@
   #hud label { display: inline-flex; gap: 6px; align-items: center; color: var(--dim); }
   #hud input[type=range] { width: 120px; accent-color: var(--water-hi); }
   #hud .spacer { flex: 1; }
+  #hud .break { flex-basis: 100%; height: 0; }
+  #hud select { font: inherit; font-size: 18px; color: var(--ink); background: var(--black); border: 1px solid var(--kodama);
+    border-radius: 0; padding: 3px 6px; min-height: 36px; }
+  #hud .ctl { display: inline-flex; gap: 6px; align-items: center; color: var(--dim); white-space: nowrap; }
+  #hud .ctl b { color: var(--ink); font-weight: 500; min-width: 2.2em; display: inline-block; font-variant-numeric: tabular-nums; }
+  #hud .ctl input[type=range] { width: 110px; }
+  #f-nosig { display: none; color: var(--water-hi); }
+  #f-nosig.show { display: inline; }
   #keys { position: fixed; right: 16px; bottom: 70px; z-index: 11; background: var(--black); border: 1px solid var(--kodama);
     padding: 12px 16px; font-size: 18px; display: none; }
   #keys.show { display: block; }
@@ -58,19 +66,38 @@
   <span class="fact" id="f-p2">2 <b>p13</b> g1/2</span>
   <span class="fact" id="f-note">note <b>-</b></span>
   <span class="fact" id="f-bpm"><b>90</b> bpm</span>
+  <span class="fact" id="f-seed">seed <b>-</b></span>
+  <span class="fact" id="f-loops">loops <b>0</b>/4 · 4 bar</span>
+  <span class="fact" id="f-out"></span>
+  <span class="fact" id="f-nosig">no signal at the output: check the device mute switch, volume and output device</span>
   <span class="spacer"></span>
   <button id="b-play" class="on" title="Space">play</button>
   <button id="b-gen" title="N">next gen</button>
-  <button id="b-reset" title="R">reset</button>
+  <button id="b-reseed" title="R">reseed</button>
+  <button id="b-layer" title="L">+ loop</button>
+  <button id="b-clear" title="C">clear</button>
+  <button id="b-reset" title="Shift+R">reset</button>
   <button id="b-mode" title="M">wall</button>
   <button id="b-enable" title="enable audio and MIDI">enable</button>
   <label title="master">vol <input id="r-master" type="range" min="0" max="1" step="0.01" value="0.7"></label>
   <button id="b-keys" title="?">keys</button>
+  <span class="break"></span>
+  <span class="ctl" title="Up Down">bpm <input id="r-bpm" type="range" min="20" max="300" step="1" value="90"><b id="v-bpm">90</b></span>
+  <span class="ctl">pitch <input id="r-pitch" type="range" min="-24" max="24" step="1" value="0"><b id="v-pitch">0</b></span>
+  <span class="ctl">key <select id="s-root" title="root"></select><select id="s-scale" title="scale"></select></span>
+  <span class="ctl" title="A">arp <select id="s-arp" title="arp mode"></select><select id="s-arprate" title="arp rate"></select><select id="s-arpoct" title="arp octaves"></select></span>
+  <span class="ctl">delay <input id="r-delay" type="range" min="0" max="1" step="0.01" value="0"><b id="v-delay">0.00</b></span>
+  <span class="ctl">growth <input id="r-growth" type="range" min="0" max="8" step="1" value="0"><b id="v-growth">off</b></span>
 </div>
 <div id="keys"><table>
   <tr><td>Space</td><td>play</td></tr>
   <tr><td>N</td><td>next gen</td></tr>
-  <tr><td>R</td><td>reset</td></tr>
+  <tr><td>R</td><td>reseed (new seed, new plants)</td></tr>
+  <tr><td>L</td><td>+ loop: a seeded 4 bar layer from the next bar</td></tr>
+  <tr><td>C</td><td>clear loops</td></tr>
+  <tr><td>Shift+R</td><td>reset the plants</td></tr>
+  <tr><td>A</td><td>arp mode</td></tr>
+  <tr><td>Up Down</td><td>bpm</td></tr>
   <tr><td>1 2</td><td>plant</td></tr>
   <tr><td>Left Right</td><td>preset</td></tr>
   <tr><td>M</td><td>norns / wall</td></tr>

@@ -1,6 +1,7 @@
-// app.js · sonar page: renderer + sim + live (OSC over WebSocket) + keys.
+// app.js · sonar page: renderer + sim garden (garden.js) + live (OSC over WebSocket) + keys + controls.
 // Audio engines and MIDI load only after the Enable click (audio.js, midi.js).
-import { Plant, LSystem, Turtle, Sequencer, checkPlantPosition, makeRandom, SCREEN, DRAW } from "./lsys.js";
+import { Plant, LSystem, Turtle, makeRandom, DRAW } from "./lsys.js";
+import { Garden, LOOP_BARS, MAX_LAYERS, SCALE_NAMES, ARP_MODES, ARP_RATES, noteName } from "./garden.js";
 import { OscWs } from "./osc-ws.js";
 
 const q = new URLSearchParams(location.search);
@@ -8,6 +9,7 @@ const catalog = await (await fetch(new URL("./catalog.json", import.meta.url))).
 const D = catalog.defaults;
 const NPRESETS = catalog.plants.length;
 const pid = (n) => "p" + String(n).padStart(2, "0");
+const newSeed = () => ((Date.now() ^ (Math.random() * 0xffffffff)) >>> 0) % 1000000 + 1;
 
 // ------------------------------------------------------------------ state
 const S = {
@@ -23,13 +25,15 @@ const S = {
   segments: { 1: 0, 2: 0 },
   lastGen: { 1: null, 2: null },
   lastNote: null,
-  instr: [Number(q.get("p1")) || D.initial_plant_instructions[0], Number(q.get("p2")) || Number(q.get("p1")) || D.initial_plant_instructions[1]],
+  instr: [0, 0],
   errors: 0,
   hb: 0,
   flags: { shanshui: q.get("shanshui") === "1", kodama: q.get("kodama") === "1" },
   weather: 0,
   flood: 0,
   phase: null,
+  delay: Number(q.get("delay")) || 0,
+  seed: Number(q.get("seed")) || newSeed(),
 };
 window.__sonar = S; // read by the Playwright tests
 S.blackoutOn = window.sonarBlackout.on;
@@ -40,35 +44,27 @@ export const on = (ev, f) => listeners[ev].push(f);
 const emit = (ev, x) => { for (const f of listeners[ev]) { try { f(x); } catch (e) { S.errors++; console.warn(ev, e); } } };
 window.__sonarOn = on;
 
-// ------------------------------------------------------------------ plants
-const random = makeRandom(Number(q.get("seed")) || ((Date.now() & 0xffff) + 1));
-const plants = [new Plant(1, { random, defaults: D }), new Plant(2, { random, defaults: D })];
-const geom = [{ segments: [], circles: [] }, { segments: [], circles: [] }];
-const lit = [new Map(), new Map()]; // sentence index -> brightness 0..1
-const noteAt = [null, null];          // last played note position per plant (norns mode highlight)
-let seqs = [null, null];
+// ------------------------------------------------------------------ garden (sim)
+const instrArg = (q.get("p1") || q.get("p2")) ? [Number(q.get("p1")) || D.initial_plant_instructions[0], Number(q.get("p2")) || Number(q.get("p1")) || D.initial_plant_instructions[1]] : null;
+const G = new Garden({ catalog, seed: S.seed, instr: instrArg || (q.get("seed") ? null : D.initial_plant_instructions) });
+window.__garden = G;
+S.instr = G.instr;
+G.onGen = (g) => { S.lastGen[g.plant] = { gen: g.gen, max: g.max, instr: g.instr }; lit.get(g.plant)?.clear(); emit("gen", g); };
+for (let k = 0; k < 2; k++) S.lastGen[k + 1] = { gen: G.plants[k].currentGeneration, max: G.plants[k].maxGenerations, instr: G.instr[k] };
+if (q.get("pitch")) G.setPitch(Number(q.get("pitch")));
+if (q.get("growth")) G.setGrowth(Number(q.get("growth")));
+if (q.get("arp")) G.setArp({ mode: q.get("arp"), rate: q.get("arprate") || "1/8", octaves: Number(q.get("arpoct")) || 1 });
+if (q.get("key")) { const [r, ...m] = q.get("key").split(","); G.setKey(Number(r) || undefined, m.join(",") || undefined); }
+
 let beat0 = performance.now();
 const nowBeats = () => ((performance.now() - beat0) / 1000) * (S.bpm / 60);
-const simSeqOpts = () => {
-  const o = { random, t: nowBeats() };
-  if (S.simOpts?.duration) o.duration = S.simOpts.duration;
-  if (S.simOpts?.cfScalar) o.cfScalars = [S.simOpts.cfScalar];
-  return o;
-};
+const lit = new Map();      // plant id -> Map(sentence index -> brightness)
+const noteAt = new Map();   // plant id -> last played note position (norns mode highlight)
+const litOf = (id) => { let m = lit.get(id); if (!m) { m = new Map(); lit.set(id, m); } return m; };
 
-function setupSim(k, instr, gen) {
-  S.instr[k] = instr;
-  const p = plants[k];
-  p.resetOffset();
-  p.setup(catalog.plants[instr - 1], instr, gen);
-  seqs[k] = new Sequencer(p, D, simSeqOpts());
-  pending[k] = null;
-  lit[k].clear();
-  S.lastGen[k + 1] = { gen: p.currentGeneration, max: p.maxGenerations, instr };
-  emit("gen", { plant: k + 1, gen: p.currentGeneration, max: p.maxGenerations, sim: true });
-}
-
-// live plants: rebuilt from /sonar/rules + /sonar/gen
+// ------------------------------------------------------------------ live plants: rebuilt from /sonar/rules + /sonar/gen
+const random = G.random;
+const plants = G.plants;
 const liveRules = [null, null];
 function liveRulesMsg(a) {
   const id = a[0], axiom = String(a[1] ?? ""), n = Number(a[2]) || 0;
@@ -89,7 +85,7 @@ function liveGenMsg(a) {
     p.turtle = new Turtle(rules.axiom, length || 35, (angle * Math.PI) / 180, { random });
     p.resetOffset();
     rules.fresh = false;
-    lit[k].clear();
+    litOf(id).clear();
   }
   p.axiom = rules.axiom; p.ruleset = rules.ruleset;
   p.angle = angle; p.length = length; p.maxGenerations = maxgen; p.currentGeneration = gen;
@@ -98,7 +94,6 @@ function liveGenMsg(a) {
   p.instr = { angle };
   p.turtle.theta = (angle * Math.PI) / 180;
   if (truncated || !sentence) {
-    // regenerate from the rules (random "!" angles will differ from the device)
     p.lsys.update(rules.axiom, rules.ruleset);
     for (let i = 0; i < gen; i++) p.lsys.generate(1);
     sentence = p.lsys.sentence;
@@ -110,13 +105,13 @@ function liveGenMsg(a) {
 }
 
 // ------------------------------------------------------------------ note events (sim or live)
-function noteEvent(plant, idx, note, freq, x, y, dur) {
-  const k = plant - 1;
-  lit[k].set(idx, 1);
-  noteAt[k] = { x, y, idx, t: performance.now() };
+function noteEvent(ev) {
+  const { plant, idx, x, y } = ev;
+  if (idx > 0) litOf(plant).set(idx, 1);
+  if (!ev.arp) noteAt.set(plant, { x, y, idx, t: performance.now() });
   S.notes++;
-  S.lastNote = { plant, idx, note, freq };
-  emit("note", { plant, idx, note, freq, x, y, dur, active: plant === S.active });
+  S.lastNote = { plant, idx, note: ev.note, freq: ev.freq, arp: !!ev.arp, layer: ev.layer || 0 };
+  emit("note", { ...ev, active: plant === S.active });
 }
 
 // ------------------------------------------------------------------ live (bridge)
@@ -126,7 +121,7 @@ function liveMessage(path, a) {
   switch (path) {
     case "/sonar/rules": liveRulesMsg(a); break;
     case "/sonar/gen": liveGenMsg(a); break;
-    case "/sonar/note": noteEvent(a[0], a[1], a[2], a[3], a[4], a[5], a[6]); break;
+    case "/sonar/note": noteEvent({ plant: a[0], idx: a[1], note: a[2], freq: a[3], x: a[4], y: a[5], dur: a[6] }); break;
     case "/sonar/rest": break;
     case "/sonar/plant": if (a[0] === 1 || a[0] === 2) S.active = a[0]; break;
     case "/sonar/page": S.page = a[0]; break;
@@ -139,68 +134,55 @@ function liveMessage(path, a) {
 const clamp01 = (v) => Math.max(0, Math.min(1, Number(v) || 0));
 if (wsUrl) {
   link = new OscWs(wsUrl, liveMessage, (up) => {
-    if (up) {
-      S.source = "live";
-      seqs = [null, null];
-      link.send("/sonar/resend", []);
-    } else {
-      S.source = "live (lost)";
-    }
+    if (up) { S.source = "live"; G.play(false); link.send("/sonar/resend", []); }
+    else S.source = "live (lost)";
     emit("state", S);
   });
 }
 const live = () => S.source.startsWith("live");
 
-// ------------------------------------------------------------------ sim sequencer
-const pending = [null, null];
+// ------------------------------------------------------------------ sim clock
 function simTick() {
-  if (live() || !S.playing || S.panic) return;
-  const now = nowBeats();
-  for (let k = 0; k < 2; k++) {
-    if (!seqs[k]) continue;
-    for (let guard = 0; guard < 4000; guard++) {
-      if (!pending[k]) {
-        let ev;
-        for (let g2 = 0; g2 < 2000; g2++) { ev = seqs[k].step(); if (ev.kind !== "step") break; }
-        pending[k] = ev;
-      }
-      if (!pending[k] || pending[k].t > now) break;
-      const e = pending[k];
-      pending[k] = null;
-      if (now - e.t > 2) continue; // tab was asleep: skip, never burst
-      if (e.kind === "note") noteEvent(k + 1, e.idx, e.note, e.freq, e.x, e.y, e.dur);
-    }
-  }
+  if (live() || S.panic) return;
+  for (const ev of G.step(nowBeats())) noteEvent(ev);
 }
 setInterval(simTick, 5);
 
-// ------------------------------------------------------------------ actions (keys, buttons, MIDI)
+// ------------------------------------------------------------------ actions (keys, buttons, MIDI, sliders)
 export const act = {
   play(v) {
     S.playing = v === undefined ? !S.playing : !!v;
     if (live()) link.send("/sonar/play", [S.playing ? 1 : 0]);
-    else if (S.playing) { for (let k = 0; k < 2; k++) { seqs[k] = new Sequencer(plants[k], D, simSeqOpts()); pending[k] = null; } }
+    else G.play(S.playing);
     emit("state", S);
   },
   nextGen() {
     if (live()) { link.send("/sonar/generate", [S.active, 1]); return; }
-    const k = S.active - 1, p = plants[k];
-    if (p.generate(1)) { S.lastGen[S.active] = { gen: p.currentGeneration, max: p.maxGenerations, instr: S.instr[k] }; emit("gen", { plant: S.active, gen: p.currentGeneration, sim: true }); }
-    else setupSim(k, S.instr[k]);
+    G.active = S.active; G.nextGen();
   },
   reset() {
     if (live()) { link.send("/sonar/reset", []); return; }
-    setupSim(0, S.instr[0]); setupSim(1, S.instr[1]);
+    G.reset();
   },
+  // new seed for the base garden: new presets, new random angles
+  reseed(seed) {
+    S.seed = G.seed(seed ?? newSeed());
+    S.instr = G.instr;
+    for (let k = 0; k < 2; k++) { S.lastGen[k + 1] = { gen: G.plants[k].currentGeneration, max: G.plants[k].maxGenerations, instr: G.instr[k] }; litOf(k + 1).clear(); }
+    syncUrl();
+    emit("state", S);
+  },
+  // a seeded loop layer on the next bar line
+  addLayer(seed) { if (live()) return null; const L = G.addLayer(seed ?? newSeed(), nowBeats()); emit("state", S); return L; },
+  clearLayers() { for (const L of G.layers) { lit.delete(L.id); noteAt.delete(L.id); } G.clearLayers(); emit("state", S); },
   plant(n) {
     if (live()) link.send("/sonar/plant", [n]);
-    S.active = n; emit("state", S);
+    S.active = n; G.active = n; emit("state", S);
   },
   preset(dir) {
     const k = S.active - 1;
-    const n = ((S.instr[k] - 1 + dir + NPRESETS) % NPRESETS) + 1;
-    if (live()) { S.instr[k] = n; link.send(`/param/plant${S.active}_instructions`, [n]); return; }
-    setupSim(k, n);
+    if (live()) { const n = ((S.instr[k] - 1 + dir + NPRESETS) % NPRESETS) + 1; S.instr[k] = n; link.send(`/param/plant${S.active}_instructions`, [n]); return; }
+    G.active = S.active; G.preset(dir);
   },
   angle(deg) {
     const k = S.active - 1;
@@ -212,7 +194,14 @@ export const act = {
     if (b === S.bpm) return;
     const nb = nowBeats(); S.bpm = b; beat0 = performance.now() - (nb / (b / 60)) * 1000; // keep beat phase
     if (live()) link.send("/param/clock_tempo", [b]);
+    emit("state", S);
   },
+  pitch(semi) { G.setPitch(semi); if (live()) link.send("/param/root_note_offset", [Math.round(semi)]); emit("state", S); },
+  delay(a) { S.delay = clamp01(a); emit("state", S); },
+  growth(bars) { G.setGrowth(bars); emit("state", S); },
+  key(root, scale) { G.setKey(root, scale); if (live()) { if (root !== undefined) link.send("/param/root_note", [root]); } emit("state", S); },
+  arp(o) { G.setArp(o); emit("state", S); },
+  arpCycle() { const i = ARP_MODES.indexOf(G.arp.mode); G.setArp({ mode: ARP_MODES[(i + 1) % ARP_MODES.length] }); emit("state", S); },
   mode(m) { S.mode = m || (S.mode === "wall" ? "norns" : "wall"); resize(); emit("state", S); },
   blackout(v) { v === undefined ? window.sonarBlackout.toggle() : window.sonarBlackout.set(v); },
   panic(v) {
@@ -221,20 +210,23 @@ export const act = {
     emit("state", S);
   },
   send(path, args) { if (live()) link.send(path, args); },
-  // sim sequencer options (kodama phases): note duration in beats, cf scalar
-  simParams(o) {
-    S.simOpts = { ...(S.simOpts || {}), ...o };
-    for (const s of seqs) if (s) { if (o.duration) s.duration = o.duration; if (o.cfScalar) s.cfScalars = [o.cfScalar]; }
-  },
+  simParams(o) { G.simParams(o); S.simOpts = G.simOpts; },
   isLive: () => live(),
-  setup: (k, instr, gen) => setupSim(k, instr, gen), // ?score=1 shows the score's plant
+  setup: (k, instr, gen) => G.setup(k, instr, gen), // ?score=1 shows the score's plant
+  garden: () => G,
 };
 window.__sonarAct = act;
+
+function syncUrl() {
+  try { const u = new URL(location.href); u.searchParams.set("seed", String(S.seed)); history.replaceState(null, "", u); } catch {}
+}
+syncUrl();
 
 // keys: handled synchronously, before anything else the page does
 let escTimer = null;
 window.addEventListener("keydown", (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.target && /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName) && e.key !== "Escape") return;
   const k = e.key;
   if (k === "Escape") {
     if (!e.repeat && !escTimer) escTimer = setTimeout(() => { escTimer = null; act.panic(); }, 1000);
@@ -242,11 +234,15 @@ window.addEventListener("keydown", (e) => {
   }
   if (e.repeat && k !== "ArrowLeft" && k !== "ArrowRight") return;
   const map = {
-    " ": () => act.play(), n: () => act.nextGen(), N: () => act.nextGen(), r: () => act.reset(), R: () => act.reset(),
+    " ": () => act.play(), n: () => act.nextGen(), N: () => act.nextGen(),
+    r: () => (live() ? act.reset() : act.reseed()), R: () => act.reset(), // live: the device has no seed, R resets
+    l: () => act.addLayer(), L: () => act.addLayer(), c: () => act.clearLayers(), C: () => act.clearLayers(),
+    a: () => act.arpCycle(), A: () => act.arpCycle(),
     "1": () => act.plant(1), "2": () => act.plant(2), m: () => act.mode(), M: () => act.mode(),
     h: () => hud.classList.toggle("hidden"), H: () => hud.classList.toggle("hidden"),
     f: () => fullscreen(), F: () => fullscreen(), "?": () => keysBox.classList.toggle("show"),
     ArrowLeft: () => act.preset(-1), ArrowRight: () => act.preset(1),
+    ArrowUp: () => act.bpm(S.bpm + 2), ArrowDown: () => act.bpm(S.bpm - 2),
   };
   if (S.scoreKey && S.scoreKey(k)) { e.preventDefault(); return; } // ?score=1 only
   const f = map[k];
@@ -266,21 +262,63 @@ const $ = (id) => document.getElementById(id);
 $("b-play").onclick = () => act.play();
 $("b-gen").onclick = () => act.nextGen();
 $("b-reset").onclick = () => act.reset();
+$("b-reseed").onclick = () => act.reseed();
+$("b-layer").onclick = () => act.addLayer();
+$("b-clear").onclick = () => act.clearLayers();
 $("b-mode").onclick = () => act.mode();
 $("b-keys").onclick = () => keysBox.classList.toggle("show");
 for (const b of hud.querySelectorAll("button")) b.addEventListener("keydown", (e) => { if (e.key === " ") e.preventDefault(); });
-const noteName = (n) => ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"][n % 12] + (Math.floor(n / 12) - 1);
+
+// sliders and menus (second row)
+const r = (id) => $(id);
+r("r-bpm").value = S.bpm;
+r("r-bpm").oninput = (e) => act.bpm(Number(e.target.value));
+r("r-pitch").value = G.pitch;
+r("r-pitch").oninput = (e) => act.pitch(Number(e.target.value));
+r("r-delay").value = S.delay;
+r("r-delay").oninput = (e) => act.delay(Number(e.target.value));
+r("r-growth").value = G.growth;
+r("r-growth").oninput = (e) => act.growth(Number(e.target.value));
+const selRoot = r("s-root"), selScale = r("s-scale"), selArp = r("s-arp"), selRate = r("s-arprate"), selOct = r("s-arpoct");
+for (let n = 33; n <= 60; n++) { const o = document.createElement("option"); o.value = n; o.textContent = noteName(n); selRoot.appendChild(o); }
+for (const s of SCALE_NAMES) { const o = document.createElement("option"); o.value = s; o.textContent = s; selScale.appendChild(o); }
+for (const m of ARP_MODES) { const o = document.createElement("option"); o.value = m; o.textContent = m; selArp.appendChild(o); }
+for (const m of Object.keys(ARP_RATES)) { const o = document.createElement("option"); o.value = m; o.textContent = m; selRate.appendChild(o); }
+for (const n of [1, 2, 3]) { const o = document.createElement("option"); o.value = n; o.textContent = n + " oct"; selOct.appendChild(o); }
+selRoot.onchange = (e) => act.key(Number(e.target.value), undefined);
+selScale.onchange = (e) => act.key(undefined, e.target.value);
+selArp.onchange = (e) => act.arp({ mode: e.target.value });
+selRate.onchange = (e) => act.arp({ rate: e.target.value });
+selOct.onchange = (e) => act.arp({ octaves: Number(e.target.value) });
+// a control that has been touched gives the keys back to the page
+for (const s of [selRoot, selScale, selArp, selRate, selOct]) s.addEventListener("change", () => s.blur());
+for (const el of hud.querySelectorAll("input[type=range]")) el.addEventListener("change", () => el.blur());
+
 function hudUpdate() {
   $("f-src").textContent = S.source;
   for (const id of [1, 2]) {
     const g = S.lastGen[id];
-    const ins = live() ? (g && g.instr ? pid(g.instr) : "") : pid(S.instr[id - 1]);
+    const ins = live() ? (g && g.instr ? pid(g.instr) : "") : pid(G.instr[id - 1]);
     $("f-p" + id).innerHTML = `${id}${S.active === id ? "*" : ""} <b>${ins}</b> g${g ? g.gen : "-"}/${g ? g.max : "-"}`;
   }
-  $("f-note").innerHTML = S.lastNote ? `note <b>${S.lastNote.note}</b> ${noteName(S.lastNote.note)}` : "note <b>-</b>";
+  const ln = S.lastNote;
+  $("f-note").innerHTML = ln ? `note <b>${ln.note}</b> ${noteName(ln.note)}${ln.arp ? " arp" : ln.layer ? " loop" : ""}` : "note <b>-</b>";
   $("f-bpm").innerHTML = `<b>${S.bpm}</b> bpm`;
+  $("f-seed").innerHTML = `seed <b>${S.seed}</b>`;
+  $("f-loops").innerHTML = `loops <b>${G.layers.length}</b>/${MAX_LAYERS} · ${LOOP_BARS} bar`;
+  const out = S.audio ? (S.outDb > -200 ? `out <b>${Math.max(-99, Math.round(S.outDb))}</b> dB` : "out <b>-</b>") : "";
+  $("f-out").innerHTML = out;
+  $("f-nosig").classList.toggle("show", !!S.outSilent);
   $("b-play").classList.toggle("on", S.playing);
   $("b-mode").textContent = S.mode;
+  $("v-bpm").textContent = S.bpm; $("v-pitch").textContent = (G.pitch > 0 ? "+" : "") + G.pitch;
+  $("v-delay").textContent = S.delay.toFixed(2); $("v-growth").textContent = G.growth ? G.growth + " bar" : "off";
+  if (document.activeElement !== r("r-bpm")) r("r-bpm").value = S.bpm;
+  if (selRoot.value !== String(G.key.root)) selRoot.value = String(G.key.root);
+  if (selScale.value !== G.key.scale) selScale.value = G.key.scale;
+  if (selArp.value !== G.arp.mode) selArp.value = G.arp.mode;
+  if (selRate.value !== G.arp.rate) selRate.value = G.arp.rate;
+  if (selOct.value !== String(G.arp.octaves)) selOct.value = String(G.arp.octaves);
 }
 setInterval(hudUpdate, 200);
 
@@ -292,13 +330,13 @@ small.width = DRAW.w; small.height = DRAW.h;
 const sctx = small.getContext("2d");
 const lastGood = document.createElement("canvas");
 let lastGoodAt = 0;
+let drawn = []; // [{id, geom, layer?}] from the last render
 
 function resize() {
-  const W = window.innerWidth, H = window.innerHeight;
+  const W = Math.max(1, window.innerWidth), H = Math.max(1, window.innerHeight);
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   if (S.mode === "norns") {
     const s = Math.max(1, Math.floor(Math.min(W / DRAW.w, H / DRAW.h)));
-    // integer multiple of 128 x 64 in CSS pixels; backing store matches the device pixels
     canvas.width = Math.round(DRAW.w * s * dpr); canvas.height = Math.round(DRAW.h * s * dpr);
     canvas.style.width = DRAW.w * s + "px"; canvas.style.height = DRAW.h * s + "px";
     S.scale = s;
@@ -307,7 +345,7 @@ function resize() {
     canvas.style.width = W + "px"; canvas.style.height = H + "px";
     S.scale = null;
   }
-  lastGood.width = canvas.width; lastGood.height = canvas.height;
+  lastGood.width = Math.max(1, canvas.width); lastGood.height = Math.max(1, canvas.height);
 }
 window.addEventListener("resize", resize);
 resize();
@@ -318,15 +356,16 @@ const level = (l) => { const v = Math.round(255 * Math.pow(l / 15, 0.5)); return
 function drawNorns() {
   sctx.fillStyle = "#000"; sctx.fillRect(0, 0, DRAW.w, DRAW.h);
   sctx.lineWidth = 1;
-  for (let k = 0; k < 2; k++) {
-    const g = geom[k];
-    const lv = (k + 1) === S.active ? 3 : 1; // flora plant1/2_screen_level
+  for (const d of drawn) {
+    if (d.id > 2) continue; // the device draws its two plants only
+    const g = d.geom;
+    const lv = d.id === S.active ? 3 : 1; // flora plant1/2_screen_level
     sctx.strokeStyle = level(lv);
     sctx.beginPath();
     for (const s of g.segments) { sctx.moveTo(s.x1, s.y1); sctx.lineTo(s.x2, s.y2); }
     for (const c of g.circles) { sctx.moveTo(c.x + 1, c.y); sctx.arc(c.x, c.y, 1, 0, Math.PI * 2); }
     sctx.stroke();
-    const n = noteAt[k];
+    const n = noteAt.get(d.id);
     if (n && n.x >= 0 && performance.now() - n.t < 1500) {
       const b = 10 + Math.floor(5 * Math.max(0, 1 - (performance.now() - n.t) / 1500));
       sctx.strokeStyle = level(b);
@@ -340,7 +379,6 @@ function drawNorns() {
 function drawWall() {
   const W = canvas.width, H = canvas.height;
   ctx.fillStyle = "#07090e"; ctx.fillRect(0, 0, W, H);
-  // keep the drawing clear of the controls bar while it shows (H hides it)
   const hudH = hud.classList.contains("hidden") ? 0 : hud.offsetHeight * (W / window.innerWidth);
   const AH = H - hudH;
   const s = Math.min(W / DRAW.w, AH / DRAW.h) * 0.94;
@@ -348,23 +386,21 @@ function drawWall() {
   const X = (x) => ox + x * s, Y = (y) => oy + y * s;
   const lw = Math.max(1, s * 0.12);
   ctx.lineCap = "round";
-  // ?shanshui=1: water level line and fog from /av/flood and /av/weather
   if (S.flags.shanshui && S.flood > 0) {
     const wy = Y(DRAW.h * (1 - S.flood));
     ctx.fillStyle = "rgba(46, 74, 140, 0.35)"; ctx.fillRect(0, wy, W, H - wy);
     ctx.strokeStyle = "#9FC8F0"; ctx.lineWidth = lw; ctx.beginPath(); ctx.moveTo(0, wy); ctx.lineTo(W, wy); ctx.stroke();
   }
-  for (let k = 0; k < 2; k++) {
-    const g = geom[k];
-    const act1 = (k + 1) === S.active;
-    ctx.strokeStyle = act1 ? "#2E4A8C" : "#3e466b";
-    ctx.lineWidth = lw;
+  for (const d of drawn) {
+    const g = d.geom;
+    const isLayer = d.id > 2;
+    ctx.strokeStyle = isLayer ? "rgba(62, 70, 107, 0.55)" : d.id === S.active ? "#2E4A8C" : "#3e466b";
+    ctx.lineWidth = isLayer ? lw * 0.7 : lw;
     ctx.beginPath();
     for (const sg of g.segments) { ctx.moveTo(X(sg.x1), Y(sg.y1)); ctx.lineTo(X(sg.x2), Y(sg.y2)); }
     ctx.stroke();
-    // segments being played: lit and decaying
-    const L = lit[k];
-    if (L.size) {
+    const L = lit.get(d.id);
+    if (L && L.size) {
       ctx.lineWidth = lw * 2.2;
       for (const sg of g.segments) {
         const b = L.get(sg.i);
@@ -376,15 +412,22 @@ function drawWall() {
       }
     }
   }
+  // arpeggiator: a pulse on the beat line at the bottom of the drawing
+  if (G.arp.mode !== "off" && S.lastNote?.arp) {
+    const age = (performance.now() - (S.lastArpAt || 0)) / 1000;
+    const a = Math.max(0, 1 - age * 4);
+    if (a > 0) { ctx.fillStyle = `rgba(159, 200, 240, ${(a * 0.6).toFixed(3)})`; ctx.fillRect(ox, oy + DRAW.h * s + lw * 2, DRAW.w * s * Math.min(1, (S.lastNote.note % 24) / 24), lw); }
+  }
   if (S.flags.shanshui && S.weather > 0) {
     ctx.fillStyle = `rgba(159, 200, 240, ${(S.weather * 0.45).toFixed(3)})`;
     ctx.fillRect(0, 0, W, H);
   }
 }
+on("note", (n) => { if (n.arp) S.lastArpAt = performance.now(); });
 
 function decay(dt) {
   const f = Math.exp(-dt / 0.45);
-  for (const L of lit) for (const [i, b] of L) { const nb = b * f; if (nb < 0.02) L.delete(i); else L.set(i, nb); }
+  for (const L of lit.values()) for (const [i, b] of L) { const nb = b * f; if (nb < 0.02) L.delete(i); else L.set(i, nb); }
 }
 
 let lastT = performance.now();
@@ -392,34 +435,30 @@ let frameIx = 0;
 function frame(t) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.25, (t - lastT) / 1000); lastT = t;
+  if (canvas.width === 0 || canvas.height === 0) { resize(); return; }
   if (S.panic) {
-    ctx.drawImage(lastGood, 0, 0);
+    if (lastGood.width > 0 && lastGood.height > 0) ctx.drawImage(lastGood, 0, 0);
     return;
   }
   try {
-    // flora redraws at 15 fps: check_plant_position, then draw both plants
-    if (frameIx++ % 4 === 0 || !geom[0].segments.length) {
-      if (plants[0].turtle && plants[1].turtle) checkPlantPosition(plants);
-      for (let k = 0; k < 2; k++) if (plants[k].turtle) { geom[k] = plants[k].render(); S.segments[k + 1] = geom[k].segments.length; }
+    // flora redraws at 15 fps: check_plant_position, then draw the plants
+    if (frameIx++ % 4 === 0 || !drawn.length) {
+      drawn = G.render();
+      for (const d of drawn) if (d.id <= 2) S.segments[d.id] = d.geom.segments.length;
     }
     decay(dt);
     if (S.mode === "norns") drawNorns(); else drawWall();
     S.frames++;
-    if (t - lastGoodAt > 1000) { lastGood.getContext("2d").drawImage(canvas, 0, 0); lastGoodAt = t; }
+    if (t - lastGoodAt > 1000 && canvas.width > 0 && canvas.height > 0) { lastGood.getContext("2d").drawImage(canvas, 0, 0); lastGoodAt = t; }
   } catch (e) {
     S.errors++;
     if (S.errors < 5) console.warn("frame", e);
-    try { ctx.drawImage(lastGood, 0, 0); } catch {}
+    try { if (lastGood.width > 0) ctx.drawImage(lastGood, 0, 0); } catch {}
   }
 }
 
 // ------------------------------------------------------------------ start
-if (!wsUrl) { setupSim(0, S.instr[0]); setupSim(1, S.instr[1]); }
-else {
-  // until the bridge answers, show the sim garden still (not playing)
-  setupSim(0, S.instr[0]); setupSim(1, S.instr[1]);
-  S.source = "connecting";
-}
+if (wsUrl) S.source = "connecting"; // until the bridge answers, show the sim garden still
 requestAnimationFrame(frame);
 
 // Enable: audio + MIDI, only on click (AV-STANDARD rule 2)
