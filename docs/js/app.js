@@ -32,6 +32,8 @@ const S = {
   phase: null,
 };
 window.__sonar = S; // read by the Playwright tests
+S.blackoutOn = window.sonarBlackout.on;
+window.sonarBlackout.hook((v) => { S.blackoutOn = v; });
 
 const listeners = { note: [], gen: [], state: [] };
 export const on = (ev, f) => listeners[ev].push(f);
