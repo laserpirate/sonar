@@ -14,21 +14,47 @@
   .row { border-top: 1px solid var(--kodama); padding: 16px 0; }
   .row b { font-weight: 500; }
   .row span { color: var(--dim); }
-  audio { width: 100%; margin-top: 8px; }
+  .player { display: flex; gap: 12px; align-items: center; margin-top: 10px; }
+  .player button { font: inherit; font-size: 18px; color: var(--ink); background: transparent; border: 1px solid var(--kodama);
+    border-radius: 0; padding: 4px 14px; min-width: 84px; min-height: 36px; cursor: pointer; }
+  .player button.on { background: var(--water); border-color: var(--water); }
+  .player .bar { flex: 1; height: 6px; background: #141a2a; position: relative; cursor: pointer; }
+  .player .bar i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--water-hi); }
+  .player .t { color: var(--dim); font-variant-numeric: tabular-nums; min-width: 92px; text-align: right; }
   a { color: var(--water-hi); }
-  ul { padding-left: 20px; color: var(--dim); }
+  ul { padding-left: 20px; color: var(--dim); margin: 8px 0 0; }
 </style>
 </head>
 <body>
 <main>
   <h1>sonar</h1>
-  <div class="row"><b>p01</b> <span>90 s · 90 bpm · software render, not the norns</span><audio controls preload="none" src="sonar_p01_90s_software-render_v01.mp3"></audio></div>
-  <div class="row"><b>p02</b> <span>90 s · 90 bpm · software render, not the norns</span><audio controls preload="none" src="sonar_p02_90s_software-render_v01.mp3"></audio></div>
-  <div class="row"><b>p04</b> <span>90 s · 90 bpm · software render, not the norns</span><audio controls preload="none" src="sonar_p04_90s_software-render_v01.mp3"></audio></div>
-  <div class="row"><b>rain</b> <span>90 s · 90 bpm · software render, not the norns</span><audio controls preload="none" src="rain_software-render_v01.mp3"></audio></div>
+  <div class="row" data-src="sonar_p01_90s_software-render_v01.mp3"><b>p01</b> <span>90 s · 90 bpm · software render, not the norns</span></div>
+  <div class="row" data-src="sonar_p02_90s_software-render_v01.mp3"><b>p02</b> <span>90 s · 90 bpm · software render, not the norns</span></div>
+  <div class="row" data-src="sonar_p04_90s_software-render_v01.mp3"><b>p04</b> <span>90 s · 90 bpm · software render, not the norns</span></div>
+  <div class="row" data-src="rain_software-render_v01.mp3"><b>rain</b> <span>90 s · 90 bpm · software render, not the norns</span></div>
   <div class="row"><a href="../index.html">sonar</a></div>
   <div class="row"><span>norns, SuperCollider, Lua, Node, Canvas 2D, Web Audio, Web MIDI, Python, numpy, scipy, ffmpeg, Playwright, Claude Code</span>
     <ul><li>flora: jaseknighter</li><li>raindrops: ambalek</li></ul></div>
 </main>
+<script>
+  var all = [];
+  var fmt = function (s) { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
+  document.querySelectorAll(".row[data-src]").forEach(function (row) {
+    var a = new Audio(); a.preload = "none"; a.src = row.dataset.src;
+    var p = document.createElement("div"); p.className = "player";
+    var b = document.createElement("button"); b.textContent = "play";
+    var bar = document.createElement("div"); bar.className = "bar"; var fill = document.createElement("i"); bar.appendChild(fill);
+    var t = document.createElement("span"); t.className = "t"; t.textContent = "0:00 / 1:32";
+    p.appendChild(b); p.appendChild(bar); p.appendChild(t); row.appendChild(p);
+    all.push(a);
+    b.onclick = function () {
+      if (a.paused) { all.forEach(function (o) { if (o !== a) o.pause(); }); a.play(); } else a.pause();
+    };
+    a.onplay = function () { b.textContent = "pause"; b.classList.add("on"); };
+    a.onpause = a.onended = function () { b.textContent = "play"; b.classList.remove("on"); };
+    a.ontimeupdate = function () { fill.style.width = (100 * a.currentTime / (a.duration || 1)) + "%"; t.textContent = fmt(a.currentTime) + " / " + fmt(a.duration); };
+    bar.onclick = function (e) { var r = bar.getBoundingClientRect(); if (a.duration) a.currentTime = a.duration * (e.clientX - r.left) / r.width; };
+  });
+</script>
 </body>
 </html>
