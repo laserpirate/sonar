@@ -72,6 +72,13 @@ export const MAP = {
     gainDb: -6,            // headroom
     limiterDb: -7,         // a dB under the headroom: the 2 ms attack lets transients past
   },
+  norns: {                 // score to norns over the bridge (flora param ids and option indices)
+    scaleMode: 5,          // dorian in flora's scale list
+    cfs1: 2,               // cf scalar option 2 = x1 (the score plays at scale pitch)
+    dur: 5,                // plant_1_note_duration option 5 = 1 beat
+    durShed: 7,            // option 7 = 2 beats (kodama Shed)
+    tempoEveryS: 0.5,      // clock_tempo at most every 0.5 s, on a whole-bpm change
+  },
   panicRampS: 0.012,       // all voices to silence inside 50 ms
   lookaheadS: 0.25,        // events are scheduled this far ahead of the clock
   logMax: 20000,

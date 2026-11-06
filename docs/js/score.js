@@ -165,7 +165,7 @@ export class Score {
     const p = new Plant(1, { random: rng, defaults: this.D });
     p.setup(this.instr, this.plantNo, gen);
     this.plant = p;
-    if (this.seq) { this.seq.plant = p; this.seq.reset(this.seq.t); this.pend = null; }
+    if (this.seq) this.seq.plant = p;   // the walk keeps its place, as the device does on a new sentence
   }
   rootNow() { return this.root - this.shift; }
   scale() {
@@ -194,6 +194,10 @@ export class Score {
     if (this.kind === "kodama" && sc.phase) this._kodama(sc, t);
     if (Array.isArray(sc.entered)) for (const tag of sc.entered) this._entered(tag, t);
     this._weatherApply(t);
+    if (this.osc) {
+      this._sendTempo(false);
+      if (this.moving !== this.sentMoving) { this.sentMoving = this.moving; this._osc("/sonar/play", [this.moving ? 1 : 0]); }
+    }
     this._drift(t);
     this._advance(t, dt);
   }
@@ -218,9 +222,9 @@ export class Score {
     if (g === cur) return;
     if (g === cur + 1) this.plant.generate(1);
     else this.plant.setup(this.instr, this.plantNo, g);
-    this.pend = null;
     this._ev({ t: r3(t), k: "gen", g: this.plant.currentGeneration, len: this.plant.sentence.length });
     this._osc("/sonar/generate", [1, g > cur ? 1 : -1]);
+    this._sendSentence();
   }
   _kodama(sc, t) {
     const p = Math.max(1, Math.min(3, Math.round(sc.phase))), pu = clamp01(sc.pu ?? 0);
@@ -228,12 +232,13 @@ export class Score {
       this.cycle = sc.cycle;
       this._newPlant(this.stream(1, this.cycle), this.plant.currentGeneration);
       this._ev({ t: r3(t), k: "cycle", c: this.cycle });
+      this._sendSentence();
     }
     if (p !== this.phase) {
       this.phase = p;
       this.seq.duration = MAP.note.durationBeats * (p === 2 ? MAP.note.shedDurationX : 1);
       this._ev({ t: r3(t), k: "phase", p });
-      this._osc("/param/plant_1_note_duration", [p === 2 ? 7 : 5]);
+      this._osc("/param/plant_1_note_duration", [p === 2 ? MAP.norns.durShed : MAP.norns.dur]);
     }
     const span = this.genMax - this.genMin;
     this.moving = p !== 3;
@@ -250,7 +255,7 @@ export class Score {
       this.shift = shift;
       this.seq.notes = this.scale();
       this._ev({ t: r3(t), k: "root", r: this.rootNow() });
-      this._osc("/param/root_note", [this.rootNow()]);
+      this._osc("/param/root_note", [this.rootNow()]); this._osc("/param/scale_mode", [MAP.norns.scaleMode]);
       if (this.drone && this.playing) this.drone.setRoot(mtof(this.rootNow()), mtof(this.rootNow()) * this.cfMul, t, MAP.drone.glideS);
     }
     if (!this.ctx) return;
@@ -299,7 +304,7 @@ export class Score {
       this.pend = null;
       if (e.kind !== "note") continue;
       const te = t + Math.max(0, (e.t - this.beat) / bps);
-      if (e.t < this.restUntil) continue;
+      if (e.t < this.restUntil) { this._ev({ t: r3(te), k: "mute", n: e.note }); continue; }
       this._note(te, e);
     }
   }
@@ -334,9 +339,28 @@ export class Score {
     const f = mtof(this.rootNow());
     this.drone.start(t, f, f * this.cfMul, MAP.drone.rqDry + (MAP.drone.rqFog - MAP.drone.rqDry) * this.weather.fog, this.droneLevel());
   }
+  // norns follows the browser (README "score to norns"): flora params by id, then plant 1's sentence,
+  // so the device walks the same sentence with the same random angles
   _sendPlant() {
+    if (!this.osc) return;
     this._osc("/param/plant1_instructions", [this.plantNo]);
+    this._osc("/param/plant1_angle", [this.instr.angle]);
     this._osc("/param/root_note", [this.rootNow()]);
+    this._osc("/param/scale_mode", [MAP.norns.scaleMode]);       // its action rebuilds the scale from root_note
+    this._osc("/param/note_scalar", [this.D.note_scalar]);
+    this._osc("/param/num_active_cf_scalars", [1]);              // flora picks among the active scalars; one, as the score
+    this._osc("/param/cfs1", [MAP.norns.cfs1]);
+    this._osc("/param/plant_1_note_duration", [this.phase === 2 ? MAP.norns.durShed : MAP.norns.dur]);
+    this._sendSentence();
+    this._sendTempo(true);
+  }
+  _sendSentence() { if (this.osc) this._osc("/sonar/sentence", [1, this.plant.sentence]); }
+  _sendTempo(force) {
+    if (!this.osc) return;
+    const b = Math.round(this.bpm);
+    if (!force && (b === this.sentBpm || this.t - (this.sentBpmAt ?? -1e9) < MAP.norns.tempoEveryS)) return;
+    this.sentBpm = b; this.sentBpmAt = this.t;
+    this._osc("/param/clock_tempo", [b]);
   }
 
   // ------------------------------------------------------------------ transport
@@ -349,14 +373,14 @@ export class Score {
     this.panicked = false;
     this._droneStart(this.t);
     this._ev({ t: r3(this.t), k: "play" });
-    this._osc("/sonar/play", [1]);
+    this._osc("/sonar/play", [1]); this.sentMoving = true;
   }
   stop() {
     if (!this.playing) return;
     this.playing = false;
     if (this.drone) this.drone.release(this.now(), MAP.drone.releaseS);
     this._ev({ t: r3(this.now()), k: "stop" });
-    this._osc("/sonar/play", [0]);
+    this._osc("/sonar/play", [0]); this.sentMoving = false;
   }
   panic() {
     const t = this.now();
@@ -369,7 +393,7 @@ export class Score {
       try { this.E.saw?.allOff(); } catch {}
     }
     this._ev({ t: r3(t), k: "panic" });
-    this._osc("/sonar/play", [0]);
+    this._osc("/sonar/play", [0]); this.sentMoving = false;
   }
 
   state() {

@@ -130,7 +130,24 @@ score.state();   // {seed, plant, gen, genMax, bpm, root, voices, ...}
 | weather rain, wind, water, fog, light | rain density, wow and flutter, root down to 7 semitones, drone band wider, drone low shelf |
 | kodama phase 1, 2, 3 | generations up, down with notes x2, sequencer off (drone and fog); `cycle` reseeds the angles only |
 
-Levels, offline (`tests/score.spec.mjs`, 90 s, seed 1792909998082): drone -24.0 dBFS rms, notes peak -8.1 dBFS, mix peak -7.4 dBFS. Panic: silent (under -80 dBFS) 50 ms after the call.
+Levels, offline (`tests/score.spec.mjs`, 90 s, seed 1792909998082): drone -24.0 dBFS rms, notes peak -8.6 dBFS, mix peak -6.9 dBFS. Panic: silent (under -80 dBFS) 50 ms after the call.
+
+### score to norns
+
+Give `Score` an `osc` client (the page's `OscWs` to the bridge, or anything with `send(path, args)`) and the norns follows: it plays plant 1 on the score's preset, scale, tempo and sentence (so the same random angles). Sent, all through the bridge to UDP 10111:
+
+| when | path | args |
+| --- | --- | --- |
+| seed | `/param/plant1_instructions`, `/param/plant1_angle` | plant number, preset angle |
+| seed, water | `/param/root_note` then `/param/scale_mode` | root (MIDI), 5 (dorian; its action rebuilds the scale) |
+| seed | `/param/note_scalar`, `/param/num_active_cf_scalars`, `/param/cfs1` | 3, 1, 2 (x1) |
+| seed, kodama phase | `/param/plant_1_note_duration` | 5 (1 beat), 7 in Shed (2 beats) |
+| generation | `/sonar/generate` then `/sonar/sentence` | 1, +-1; 1, the score's sentence |
+| kodama cycle | `/sonar/sentence` | 1, the reseeded sentence |
+| tempo | `/param/clock_tempo` | whole bpm, at most every 0.5 s |
+| play, stop, panic, scroll stops or starts | `/sonar/play` | 1 or 0 |
+
+Check: `node tools/score_norns_check.mjs 60 shanshui` runs the score in real time against `bridge.mjs` and `fake-norns.mjs` and compares the score's walk (notes played, plus those muted by a rest bar or skipped by the voice cap) with fake-norns' plant 1 `/sonar/note` count. 6 Nov 2026: shanshui 35 vs 34, kodama 21 vs 21 (pass is +-1). The device does not know about rest bars, the voice cap, rain notes or the drone: it plays the whole walk, and plant 2 keeps playing flora's own walk. fake-norns now honours `plant{1,2}_instructions`, `root_note` + `scale_mode` (dorian), `note_scalar`, `plant_{1,2}_note_duration`, `cfs1`, and keeps the beat phase on a tempo change. Nothing here ran on a norns.
 
 `?score=1&seed=<n>` on the page runs the score on a scripted scroll (`docs/js/score-sim.js`); add `&kind=kodama` for the 36 s Wet / Shed / Dry cycle. Enable for sound. Space play / stop, R reseed, Esc hold panic, B blackout. Notes on the shanshui engine: `docs/notes/shanshui-mechanics_v01.md`.
 
@@ -150,6 +167,9 @@ Levels, offline (`tests/score.spec.mjs`, 90 s, seed 1792909998082): drone -24.0 
 | `tools/render_demo.py` | the engine demos |
 | `tools/render_score.mjs <kind> <seed> <s> <out>` | the score demos |
 | `tools/score_check.mjs` | score determinism in Node, no audio |
+| `tools/score_norns_check.mjs [s] [kind]` | score to fake-norns over the bridge, note counts |
+| `tools/vendor_score.mjs <dir>`, `tools/bundle_score.mjs <out>` | copies of the score for shanshui-av and the kc pages |
+| `tools/kc_check.mjs <kc dir> <http base>` | kc v03 pages: selftest, flag off equal to v02, score on from file:// and http |
 | `tools/catalog_js.mjs [--check]` | `catalog.js` from `catalog.json` |
 | `tools/shanshui_tags.mjs <upstream-engine.js>` | planner tags per chunk from the upstream engine |
 | `tools/privacy_grep.py` | gate before every commit |

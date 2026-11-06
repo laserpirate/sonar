@@ -13,7 +13,7 @@ const require = createRequire(join(here, "..", "tests", "package.json"));
 const { chromium } = require("@playwright/test");
 const [kind = "shanshui", seed = "1792909998082", secArg = "90", outArg] = process.argv.slice(2);
 if (!outArg) { console.error("usage: node tools/render_score.mjs <kind> <seed> <seconds> <out.mp3>"); process.exit(2); }
-const out = resolve(outArg), seconds = Number(secArg), port = 8093;
+const out = resolve(outArg), seconds = Number(secArg), port = 8197;
 
 const server = spawn(process.execPath, [join(here, "serve.mjs"), "--port", String(port)], { stdio: "ignore" });
 await new Promise((r) => setTimeout(r, 800));

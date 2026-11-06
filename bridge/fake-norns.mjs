@@ -49,7 +49,27 @@ let playing = true;
 let page = 1;
 let seqs = [];
 const t0 = Date.now();
-const nowBeats = () => ((Date.now() - t0) / 1000) * (BPM / 60);
+// beat clock: a tempo change keeps the beat phase (as norns' clock does), no jump
+let beatBase = 0, tBase = t0;
+const nowBeats = () => beatBase + ((Date.now() - tBase) / 1000) * (BPM / 60);
+function setTempo(b) { if (!(b > 0) || b === BPM) return; beatBase = nowBeats(); tBase = Date.now(); BPM = b; }
+// flora params the score sends (README "score to norns"); unset = flora's defaults from the catalog
+const SND = { notes: null, root: D.root_note, mode: D.scale_mode, noteScalar: null, dur: [null, null], cfs: null };
+const DORIAN = [2, 1, 2, 2, 2, 1, 2];
+function buildScale() {   // MusicUtil.generate_scale_of_length(root, mode, 24); dorian only, other modes keep the catalog notes
+  if (SND.mode !== 5) { SND.notes = null; return; }
+  const out = [SND.root]; for (let i = 0; out.length < D.scale_length; i++) out.push(out[out.length - 1] + DORIAN[i % 7]);
+  SND.notes = out;
+}
+const seqOpts = (k) => {
+  const o = { random, t: nowBeats() };
+  if (SND.notes) o.notes = SND.notes;
+  if (SND.noteScalar !== null) o.noteScalar = SND.noteScalar;
+  if (SND.dur[k] !== null) o.duration = SND.dur[k];
+  if (SND.cfs !== null) o.cfScalars = [SND.cfs];
+  return o;
+};
+const applySnd = () => { for (let k = 0; k < 2; k++) if (seqs[k]) { const o = seqOpts(k); if (o.notes) seqs[k].notes = o.notes.slice(); if (o.noteScalar !== undefined) seqs[k].noteScalar = o.noteScalar; if (o.duration !== undefined) seqs[k].duration = o.duration; if (o.cfScalars) seqs[k].cfScalars = o.cfScalars; } };
 
 function geometryOf(p) {
   // the device draws after check_plant_position; count from a fresh render
@@ -67,7 +87,7 @@ function setupPlant(k, instr, gen) {
   instrNum[k] = instr;
   p.resetOffset();
   p.setup(catalog.plants[instr - 1], instr, gen);
-  seqs[k] = new Sequencer(p, D, { random, t: nowBeats() });
+  seqs[k] = new Sequencer(p, D, seqOpts(k));
   sendRules(p);
   sendGen(p);
 }
@@ -152,7 +172,7 @@ listener.on("message", (buf) => {
     }
     case "/sonar/play":
       playing = Number(a[0] ?? 1) === 1;
-      if (playing) for (let k = 0; k < 2; k++) { seqs[k] = new Sequencer(plants[k], D, { random, t: nowBeats() }); nextEv[k] = null; }
+      if (playing) for (let k = 0; k < 2; k++) { seqs[k] = new Sequencer(plants[k], D, seqOpts(k)); nextEv[k] = null; }
       break;
     case "/sonar/resend":
       for (const p of plants) { sendRules(p); sendGen(p); }
@@ -167,7 +187,15 @@ listener.on("message", (buf) => {
     default: {
       const pm = /^\/param\/plant([12])_angle$/.exec(m.address);
       if (pm) { const p = plants[Number(pm[1]) - 1]; p.setAngle(Number(a[0])); sendGen(p); }
-      if (m.address === "/param/clock_tempo") BPM = Number(a[0]) || BPM;
+      if (m.address === "/param/clock_tempo") setTempo(Number(a[0]));
+      const im = /^\/param\/plant([12])_instructions$/.exec(m.address);
+      if (im) { const n = Number(a[0]); if (n >= 1 && n <= catalog.plants.length) setupPlant(Number(im[1]) - 1, n); }
+      const dm = /^\/param\/plant_([12])_note_duration$/.exec(m.address);
+      if (dm) { const v = D.note_durations[Number(a[0]) - 1]; if (v) { SND.dur[Number(dm[1]) - 1] = v; applySnd(); } }
+      if (m.address === "/param/root_note") { SND.root = Number(a[0]); }   // flora: build_scale runs on the scale_mode action
+      if (m.address === "/param/scale_mode") { SND.mode = Number(a[0]); buildScale(); applySnd(); }
+      if (m.address === "/param/note_scalar") { SND.noteScalar = Number(a[0]); applySnd(); }
+      if (m.address === "/param/cfs1") { const v = D.cf_scalars_map[Number(a[0]) - 1]; if (v) { SND.cfs = v; applySnd(); } }
     }
   }
 });
