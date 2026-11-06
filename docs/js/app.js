@@ -227,6 +227,7 @@ export const act = {
     for (const s of seqs) if (s) { if (o.duration) s.duration = o.duration; if (o.cfScalar) s.cfScalars = [o.cfScalar]; }
   },
   isLive: () => live(),
+  setup: (k, instr, gen) => setupSim(k, instr, gen), // ?score=1 shows the score's plant
 };
 window.__sonarAct = act;
 
@@ -247,6 +248,7 @@ window.addEventListener("keydown", (e) => {
     f: () => fullscreen(), F: () => fullscreen(), "?": () => keysBox.classList.toggle("show"),
     ArrowLeft: () => act.preset(-1), ArrowRight: () => act.preset(1),
   };
+  if (S.scoreKey && S.scoreKey(k)) { e.preventDefault(); return; } // ?score=1 only
   const f = map[k];
   if (f) { e.preventDefault(); try { f(); } catch (err) { S.errors++; console.warn(err); } }
 }, true);
@@ -438,5 +440,7 @@ $("r-master").oninput = (e) => emit("state", Object.assign(S, { master: Number(e
 S.master = Number($("r-master").value);
 
 // ?kodama=1: phase presets W S D (Tier 4)
+// ?score=1: the ambient score on a synthetic scene (score-page.js)
+if (q.get("score") === "1") import("./score-page.js").then((m) => m.init({ S, act, q, on })).catch((e) => console.warn("score", e));
 if (S.flags.kodama) import("./kodama.js").then((m) => m.init({ S, act })).catch((e) => console.warn("kodama", e));
 emit("state", S);

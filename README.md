@@ -104,6 +104,35 @@ MIDI default map (AV-STANDARD v02): note 36 play/pause, 37 next gen, 38 reset, 4
 | `sonar_p02_90s_software-render_v01.mp3` | p02 |
 | `sonar_p04_90s_software-render_v01.mp3` | p04 |
 | `rain_software-render_v01.mp3` | raindrops sequencer, one stereo delay standing in for softcut |
+| `score_shanshui_seed1792909998082_software-render_v01.mp3` | the score on the sim scroll, seed 1792909998082 (p09). WebAudio ports in an OfflineAudioContext (`tools/render_score.mjs`) |
+| `score_kodama_kc-01_software-render_v01.mp3` | the score on the sim kodama cycle (36 s), seed `kc-01` (p06) |
+
+## Score
+
+`docs/js/score.js`: an ambient score for shanshui scrolls and kodama scenes, deterministic from the seed. ES module, no DOM, no globals. Every number is in `docs/js/map.js`.
+
+```js
+import { Score, createEngines } from "./score.js";
+const score = new Score({ engines: createEngines(audioContext), osc });   // both optional
+score.seed(1792909998082);
+score.scene({ kind: "shanshui", x, velocity, tags, entered, weather });  // or kind "kodama", phase, pu, cycle
+score.play(); score.stop(); score.panic();
+score.state();   // {seed, plant, gen, genMax, bpm, root, voices, ...}
+```
+
+| in | out |
+| --- | --- |
+| seed | plant `seed mod 13` (p01..p13), root A1..A3, RNG streams for the L-system angles, the drone drift, rain notes, the sequencer |
+| velocity | bpm 36..96 (400 world px/s = 96), smoothed 2 s; under 2 px/s the sequencer rests, the drone holds |
+| entered `mount`, `distmount` | one generation step, at most every 8 s, up to the preset max then back down |
+| entered `flatmount` | one bar of rest |
+| entered `boat` | one rain note |
+| weather rain, wind, water, fog, light | rain density, wow and flutter, root down to 7 semitones, drone band wider, drone low shelf |
+| kodama phase 1, 2, 3 | generations up, down with notes x2, sequencer off (drone and fog); `cycle` reseeds the angles only |
+
+Levels, offline (`tests/score.spec.mjs`, 90 s, seed 1792909998082): drone -24.0 dBFS rms, notes peak -8.1 dBFS, mix peak -7.4 dBFS. Panic: silent (under -80 dBFS) 50 ms after the call.
+
+`?score=1&seed=<n>` on the page runs the score on a scripted scroll (`docs/js/score-sim.js`); add `&kind=kodama` for the 36 s Wet / Shed / Dry cycle. Enable for sound. Space play / stop, R reseed, Esc hold panic, B blackout. Notes on the shanshui engine: `docs/notes/shanshui-mechanics_v01.md`.
 
 ## Landscape hooks (off by default)
 
@@ -118,7 +147,11 @@ MIDI default map (AV-STANDARD v02): note 36 play/pause, 37 next gen, 38 reset, 4
 | `tools/check_lua.py . ../_norns/lua --beats 64` | compiles every .lua, runs both scripts' `init()` and 64 beats under a headless norns mock (needs `pip install lupa` and a checkout of monome/norns) |
 | `tools/identity_lsys.py . ../_norns/lua` | `lsys.js` against flora's own Lua: sentence, segments, end points, notes per index (p01 p02 p04 gen 2) |
 | `tests/` (`npm install`, `npx playwright test`) | sim draws, fake-norns through the bridge (same segment count), keys to fake-norns, blackout black, offline engine levels, fake MIDI flood |
-| `tools/render_demo.py` | the demos |
+| `tools/render_demo.py` | the engine demos |
+| `tools/render_score.mjs <kind> <seed> <s> <out>` | the score demos |
+| `tools/score_check.mjs` | score determinism in Node, no audio |
+| `tools/catalog_js.mjs [--check]` | `catalog.js` from `catalog.json` |
+| `tools/shanshui_tags.mjs <upstream-engine.js>` | planner tags per chunk from the upstream engine |
 | `tools/privacy_grep.py` | gate before every commit |
 | `tools/fork_upstream.py`, `tools/apply_hooks.py` | regenerate the fork from `upstream/`, every replace counted |
 
