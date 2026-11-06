@@ -127,5 +127,5 @@ Not verified on real hardware: the norns, SuperCollider class loading, `;install
 ## Credits
 
 - flora by jaseknighter (MIT, `upstream/flora/LICENSE`), with its own credits: Brian Crabtree, Dan Derks, Daniel Shiffman, Eli Fieldsteel, Mark Wheeler, Tom Armitage, Tyler Etters.
-- raindrops by ambalek (`upstream/raindrops/`; no license file in the upstream repository).
+- raindrops by ambalek (MIT, declared in `upstream/raindrops/readme.md`; the repository has no separate LICENSE file).
 - Software: norns, SuperCollider, Lua, Node, Canvas 2D, Web Audio, Web MIDI, Python with numpy and scipy, ffmpeg, Playwright, Claude Code.
