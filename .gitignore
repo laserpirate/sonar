@@ -1,0 +1,15 @@
+node_modules/
+__pycache__/
+*.pyc
+test-results/
+.playwright/
+tools/_tmp/
+# process files stay on Z:, never in the public repo
+PROMPT_*.md
+ADDENDUM-*.md
+MORNING.md
+SYNC.md
+DECISIONS.md
+QUESTIONS.md
+PROGRESS.md
+SESSION_*.md

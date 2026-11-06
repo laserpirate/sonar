@@ -1,0 +1,285 @@
+[
+ {
+  "id": "p01",
+  "start_from": [
+   54.0,
+   54
+  ],
+  "ruleset": [
+   [
+    "F",
+    "F++F++F|F-F++F"
+   ]
+  ],
+  "axiom": "F++F++F++F++F++F",
+  "max_generations": 2,
+  "length": 8.0,
+  "angle": 36,
+  "initial_turtle_rotation": 0,
+  "starting_generation": 1
+ },
+ {
+  "id": "p02",
+  "start_from": [
+   74.0,
+   64
+  ],
+  "ruleset": [
+   [
+    "F",
+    "FF+[+F-F-F]-[-F+F+F]"
+   ]
+  ],
+  "axiom": "F",
+  "max_generations": 2,
+  "length": 8.0,
+  "angle": 25,
+  "initial_turtle_rotation": 90,
+  "starting_generation": 1
+ },
+ {
+  "id": "p03",
+  "start_from": [
+   64.0,
+   30
+  ],
+  "ruleset": [
+   [
+    "M",
+    "OA++pA----FA[-OA----MA]++"
+   ],
+   [
+    "F",
+    "+OA--PA[---MA--FA]+"
+   ],
+   [
+    "O",
+    "-MA++FA[+++OA++PA]-"
+   ],
+   [
+    "P",
+    "--OA++++MA[+PA++++FA]--FA"
+   ],
+   [
+    "A",
+    ""
+   ]
+  ],
+  "axiom": "[F]++[F]++[F]++[F]++[F]",
+  "max_generations": 10,
+  "length": 15,
+  "angle": 36,
+  "initial_turtle_rotation": 0,
+  "starting_generation": 1
+ },
+ {
+  "id": "p04",
+  "start_from": [
+   49.0,
+   59
+  ],
+  "ruleset": [
+   [
+    "F",
+    "F--F--F--G"
+   ],
+   [
+    "G",
+    "GG"
+   ]
+  ],
+  "axiom": "F--F--F",
+  "max_generations": 2,
+  "length": 32.0,
+  "angle": 59.99999999999999,
+  "initial_turtle_rotation": 90,
+  "starting_generation": 1
+ },
+ {
+  "id": "p05",
+  "start_from": [
+   82.0,
+   52.0
+  ],
+  "ruleset": [
+   [
+    "X",
+    "+YF-XFX-FY+"
+   ],
+   [
+    "Y",
+    "-XF+YFY+FX-"
+   ]
+  ],
+  "axiom": "X",
+  "max_generations": 3,
+  "length": 20,
+  "angle": 90,
+  "initial_turtle_rotation": 90,
+  "starting_generation": 1
+ },
+ {
+  "id": "p06",
+  "start_from": [
+   79.0,
+   54
+  ],
+  "ruleset": [
+   [
+    "F",
+    "FF+F+F+F+FF"
+   ]
+  ],
+  "axiom": "F+F+F+F",
+  "max_generations": 2,
+  "length": 8.0,
+  "angle": 90,
+  "initial_turtle_rotation": 90,
+  "starting_generation": 1
+ },
+ {
+  "id": "p07",
+  "start_from": [
+   61.0,
+   59
+  ],
+  "ruleset": [
+   [
+    "F",
+    "-F++F-"
+   ]
+  ],
+  "axiom": "F",
+  "max_generations": 6,
+  "length": 16.0,
+  "angle": 45,
+  "initial_turtle_rotation": 90,
+  "starting_generation": 2
+ },
+ {
+  "id": "p08",
+  "start_from": [
+   39.0,
+   32.0
+  ],
+  "ruleset": [
+   [
+    "F",
+    "FF-F-F-F-F-F+F"
+   ]
+  ],
+  "axiom": "F",
+  "max_generations": 2,
+  "length": 16.0,
+  "angle": 90,
+  "initial_turtle_rotation": 0,
+  "starting_generation": 1
+ },
+ {
+  "id": "p09",
+  "start_from": [
+   64.0,
+   64
+  ],
+  "ruleset": [
+   [
+    "F",
+    "[+FG-F]F[-FG+F]"
+   ]
+  ],
+  "axiom": "GGF",
+  "max_generations": 3,
+  "length": 6.4,
+  "angle": 25.7,
+  "initial_turtle_rotation": 90,
+  "starting_generation": 2
+ },
+ {
+  "id": "p10",
+  "start_from": [
+   64.0,
+   64
+  ],
+  "ruleset": [
+   [
+    "X",
+    "FGG[+X][-X]GXF"
+   ],
+   [
+    "F",
+    "F"
+   ]
+  ],
+  "axiom": "X",
+  "max_generations": 3,
+  "length": 4.266666666666667,
+  "angle": 25.7,
+  "initial_turtle_rotation": 90,
+  "starting_generation": 2
+ },
+ {
+  "id": "p11",
+  "start_from": [
+   69.0,
+   76
+  ],
+  "ruleset": [
+   [
+    "F",
+    "G[+F]G[-F]+F"
+   ],
+   [
+    "G",
+    "GG"
+   ]
+  ],
+  "axiom": "F",
+  "max_generations": 3,
+  "length": 20,
+  "angle": 20,
+  "initial_turtle_rotation": 90,
+  "starting_generation": 1
+ },
+ {
+  "id": "p12",
+  "start_from": [
+   61.0,
+   59
+  ],
+  "ruleset": [
+   [
+    "F",
+    "F+F"
+   ]
+  ],
+  "axiom": "F",
+  "max_generations": 10,
+  "length": 16.0,
+  "angle": 0,
+  "initial_turtle_rotation": 90,
+  "starting_generation": 1
+ },
+ {
+  "id": "p13",
+  "start_from": [
+   61.0,
+   59
+  ],
+  "ruleset": [
+   [
+    "A",
+    "[TF!A[+AF[FB][FB]]]"
+   ],
+   [
+    "B",
+    "[!FB][!FB]"
+   ]
+  ],
+  "axiom": "F[!A][!A]",
+  "max_generations": 2,
+  "length": 5,
+  "angle": 30,
+  "initial_turtle_rotation": 90,
+  "starting_generation": 1
+ }
+]
