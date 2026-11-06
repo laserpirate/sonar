@@ -24,7 +24,7 @@ def insert_after(path: Path, anchor: str, addition: str, expect=1):
     if addition in text:
         log[-1] += " (already applied)"
         return
-    path.write_text(text.replace(anchor, anchor + addition), encoding="utf-8")
+    path.write_text(text.replace(anchor, anchor + addition), encoding="utf-8", newline="\n")
 
 
 def insert_before(path: Path, anchor: str, addition: str, expect=1):
@@ -36,7 +36,7 @@ def insert_before(path: Path, anchor: str, addition: str, expect=1):
     if addition in text:
         log[-1] += " (already applied)"
         return
-    path.write_text(text.replace(anchor, addition + anchor), encoding="utf-8")
+    path.write_text(text.replace(anchor, addition + anchor), encoding="utf-8", newline="\n")
 
 
 lib = root / "lib"
@@ -81,6 +81,10 @@ insert_after(lib / "plant_sounds.lua",
 insert_after(lib / "plant_sounds.lua",
              "        elseif (node_obj.rest and parent.initializing == false) then\n",
              "          if sonar_osc then sonar_osc.rest(parent.id, note_index) end\n")
+# envelope level at note on (added in the Code session, SN-20)
+insert_after(lib / "plant_sounds.lua",
+             "    envelopes[parent.id].update_envelope()\n",
+             "    if sonar_osc then sonar_osc.env(parent.id, envelopes[parent.id].get_env_level()) end\n")
 
 # 6. rain.lua ------------------------------------------------------------------
 rain = root / "rain.lua"
@@ -99,7 +103,7 @@ insert_after(rain,
 text = rain.read_text(encoding="utf-8")
 if "function cleanup()" not in text:
     text += "\nfunction cleanup()\n  sonar_osc.cleanup()\nend\n"
-    rain.write_text(text, encoding="utf-8")
+    rain.write_text(text, encoding="utf-8", newline="\n")
     log.append("rain.lua: cleanup() added")
 
 (root / "tools" / "apply_hooks.log").write_text("\n".join(log) + "\n", encoding="utf-8")

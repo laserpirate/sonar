@@ -1,14 +1,14 @@
-lib/includes.lua: after 'plant_sounds = include("sonar/lib/plant_sounds")': 1 (already applied)
-lib/parameters.lua: before '--set the reverb input engine to -10db': 1 (already applied)
+lib\includes.lua: after 'plant_sounds = include("sonar/lib/plant_sounds")': 1 (already applied)
+lib\parameters.lua: before '--set the reverb input engine to -10db': 1 (already applied)
 sonar.lua: after 'save_load.init()': 1 (already applied)
 sonar.lua: after 'function cleanup ()\n  all_notes_off()': 1 (already applied)
-lib/plant.lua: after 'p.turtle.pop()\n      p.restart_rendering = true': 1 (already applied)
-lib/plant.lua: before 'p.initializing = false\n    initializing = false\n  end': 1 (already applied)
-lib/plant.lua: after 'envelopes[inactive_plant].set_active(false)\n    set_midi_cha': 1 (already applied)
-lib/plant_sounds.lua: after 'freq = freq * cf_scalar\n            note_to_play = MusicUtil': 1 (already applied)
-lib/plant_sounds.lua: after 'elseif (node_obj.rest and parent.initializing == false) then': 1 (already applied)
+lib\plant.lua: after 'p.turtle.pop()\n      p.restart_rendering = true': 1 (already applied)
+lib\plant.lua: before 'p.initializing = false\n    initializing = false\n  end': 1 (already applied)
+lib\plant.lua: after 'envelopes[inactive_plant].set_active(false)\n    set_midi_cha': 1 (already applied)
+lib\plant_sounds.lua: after 'freq = freq * cf_scalar\n            note_to_play = MusicUtil': 1 (already applied)
+lib\plant_sounds.lua: after 'elseif (node_obj.rest and parent.initializing == false) then': 1 (already applied)
+lib\plant_sounds.lua: after 'envelopes[parent.id].update_envelope()': 1
 rain.lua: after 'local MusicUtil = require "musicutil"': 1 (already applied)
 rain.lua: after 'local function play(note, midi_channel)': 1 (already applied)
-rain.lua: before 'engine.bits(params:get("bits"))\n  engine.hiss(params:get("hi': 1
-rain.lua: after 'function init()\n  setup_params()': 1
-rain.lua: cleanup() added
+rain.lua: before 'engine.bits(params:get("bits"))\n  engine.hiss(params:get("hi': 1 (already applied)
+rain.lua: after 'function init()\n  setup_params()': 1 (already applied)

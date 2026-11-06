@@ -24,6 +24,7 @@ const WS_PORT = Number(flag("ws", 8765));
 const NORNS_IP = flag("norns", process.env.SONAR_NORNS_IP || "");
 const NORNS_PORT = Number(flag("norns-port", 10111));
 const VERBOSE = argv.includes("--verbose");
+const SHANSHUI = argv.includes("--shanshui");
 
 const stats = { udpIn: 0, wsOut: 0, wsIn: 0, udpOut: 0, clients: 0, lastNornsFrom: null };
 
@@ -43,6 +44,13 @@ udp.on("message", (buf, rinfo) => {
       c.send(json);
       stats.wsOut++;
     }
+  }
+  // --shanshui: every note also goes out MIDI-shaped for shanshui-av's av-in (later)
+  if (SHANSHUI && msg.address === "/sonar/note") {
+    const [plant, , note] = msg.args;
+    const midiJson = JSON.stringify({ path: "/av/midi", args: [0x90 | ((plant - 1) & 15), note & 127, 100],
+      midi: { type: "note", note: note & 127, velocity: 100, channel: plant }, t: Date.now() });
+    for (const c of wss.clients) if (c.readyState === 1) c.send(midiJson);
   }
   if (VERBOSE) console.log("<-udp", msg.address, msg.args.map(a => (typeof a === "number" ? +a.toFixed(3) : a)).join(" "));
 });

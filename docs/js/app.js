@@ -49,13 +49,19 @@ const noteAt = [null, null];          // last played note position per plant (no
 let seqs = [null, null];
 let beat0 = performance.now();
 const nowBeats = () => ((performance.now() - beat0) / 1000) * (S.bpm / 60);
+const simSeqOpts = () => {
+  const o = { random, t: nowBeats() };
+  if (S.simOpts?.duration) o.duration = S.simOpts.duration;
+  if (S.simOpts?.cfScalar) o.cfScalars = [S.simOpts.cfScalar];
+  return o;
+};
 
 function setupSim(k, instr, gen) {
   S.instr[k] = instr;
   const p = plants[k];
   p.resetOffset();
   p.setup(catalog.plants[instr - 1], instr, gen);
-  seqs[k] = new Sequencer(p, D, { random, t: nowBeats() });
+  seqs[k] = new Sequencer(p, D, simSeqOpts());
   pending[k] = null;
   lit[k].clear();
   S.lastGen[k + 1] = { gen: p.currentGeneration, max: p.maxGenerations, instr };
@@ -173,7 +179,7 @@ export const act = {
   play(v) {
     S.playing = v === undefined ? !S.playing : !!v;
     if (live()) link.send("/sonar/play", [S.playing ? 1 : 0]);
-    else if (S.playing) { for (let k = 0; k < 2; k++) { seqs[k] = new Sequencer(plants[k], D, { random, t: nowBeats() }); pending[k] = null; } }
+    else if (S.playing) { for (let k = 0; k < 2; k++) { seqs[k] = new Sequencer(plants[k], D, simSeqOpts()); pending[k] = null; } }
     emit("state", S);
   },
   nextGen() {
@@ -215,6 +221,12 @@ export const act = {
     emit("state", S);
   },
   send(path, args) { if (live()) link.send(path, args); },
+  // sim sequencer options (kodama phases): note duration in beats, cf scalar
+  simParams(o) {
+    S.simOpts = { ...(S.simOpts || {}), ...o };
+    for (const s of seqs) if (s) { if (o.duration) s.duration = o.duration; if (o.cfScalar) s.cfScalars = [o.cfScalar]; }
+  },
+  isLive: () => live(),
 };
 window.__sonarAct = act;
 

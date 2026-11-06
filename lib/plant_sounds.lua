@@ -40,6 +40,7 @@ function plant_sounds:new(parent)
 
   ps.engine_note_on = function(note_to_play, freq, random_note_frequency, skip_engine)
     envelopes[parent.id].update_envelope()
+    if sonar_osc then sonar_osc.env(parent.id, envelopes[parent.id].get_env_level()) end
     
     local tin_target = params:get("tin_target")
     if tin_target == parent.id or tin_target == 3 then  

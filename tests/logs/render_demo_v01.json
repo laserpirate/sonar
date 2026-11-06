@@ -1,0 +1,62 @@
+{
+ "sonar_p01_90s_software-render_v01.mp3": {
+  "notes": 270,
+  "stolen": 0,
+  "gens": [
+   {
+    "t": 21.333333333333332,
+    "plant": 1,
+    "gen": 2
+   },
+   {
+    "t": 21.333333333333332,
+    "plant": 2,
+    "gen": 2
+   }
+  ],
+  "bpm": 90,
+  "seed": 11
+ },
+ "sonar_p02_90s_software-render_v01.mp3": {
+  "notes": 270,
+  "stolen": 0,
+  "gens": [
+   {
+    "t": 21.333333333333332,
+    "plant": 1,
+    "gen": 2
+   },
+   {
+    "t": 21.333333333333332,
+    "plant": 2,
+    "gen": 2
+   }
+  ],
+  "bpm": 90,
+  "seed": 11
+ },
+ "sonar_p04_90s_software-render_v01.mp3": {
+  "notes": 180,
+  "stolen": 0,
+  "gens": [
+   {
+    "t": 21.333333333333332,
+    "plant": 1,
+    "gen": 2
+   },
+   {
+    "t": 21.333333333333332,
+    "plant": 2,
+    "gen": 2
+   }
+  ],
+  "bpm": 90,
+  "seed": 11
+ },
+ "rain_software-render_v01.mp3": {
+  "notes": 42,
+  "scale": "Major Pentatonic",
+  "root": 47,
+  "seed": 11
+ }
+}
