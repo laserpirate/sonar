@@ -30,7 +30,7 @@ export function init({ S, act }) {
     const f = document.getElementById("f-phase");
     if (f) f.innerHTML = `phase <b>${ph.label}</b>`;
   }
-  const hud = document.getElementById("hud");
+  const hud = document.getElementById("strip");
   const span = document.createElement("span");
   span.className = "fact"; span.id = "f-phase"; span.innerHTML = "phase <b>-</b>";
   hud.insertBefore(span, document.getElementById("f-bpm").nextSibling);

@@ -22,7 +22,7 @@ export function init({ S, act, q, on }) {
   let shown = "";
 
   // strip: one row of facts
-  const hud = document.getElementById("hud");
+  const hud = document.getElementById("strip");
   const strip = document.createElement("span");
   strip.className = "fact"; strip.id = "f-score";
   hud.insertBefore(strip, hud.querySelector(".spacer"));

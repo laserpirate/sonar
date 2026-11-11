@@ -7,6 +7,9 @@ import { initMidi } from "./midi.js";
 
 export async function enable({ S, on, act }) {
   const q = new URLSearchParams(location.search);
+  // iOS: "playback" keeps Web Audio sounding with the mute switch on; set before the context starts
+  S.audioSession = "absent";
+  try { if (navigator.audioSession) { navigator.audioSession.type = "playback"; S.audioSession = navigator.audioSession.type; } } catch (e) { S.audioSession = "refused"; }
   const ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: "interactive" });
   await ctx.resume();
   const C = createChain(ctx, { master: S.master ?? 0.7, bpm: S.bpm, engine: q.get("engine") || "saw" });
@@ -39,6 +42,7 @@ export async function enable({ S, on, act }) {
   // resume on return: mobile browsers suspend the context when the tab goes to the back
   const resume = () => { if (ctx.state !== "running") ctx.resume().catch(() => {}); };
   document.addEventListener("visibilitychange", () => { if (!document.hidden) resume(); });
+  window.addEventListener("pageshow", resume);
   window.addEventListener("pointerdown", resume, true);
   window.addEventListener("keydown", resume, true);
 
@@ -59,14 +63,7 @@ export async function enable({ S, on, act }) {
   };
   setInterval(meter, 250);
 
-  // engine toggle in the controls bar
-  const hud = document.getElementById("hud");
-  const b = document.createElement("button");
-  b.id = "b-engine"; b.title = "E"; b.textContent = C.engine;
-  const cycle = () => { C.engine = { saw: "rain", rain: "both", both: "saw" }[C.engine] || "saw"; b.textContent = C.engine; };
-  b.onclick = cycle;
-  hud.insertBefore(b, document.getElementById("b-enable"));
-  window.addEventListener("keydown", (e) => { if ((e.key === "e" || e.key === "E") && !e.repeat && !e.ctrlKey && !e.metaKey) cycle(); });
+  document.getElementById("b-engine").textContent = C.engine;
 
   await initMidi({ S, act, setMaster, getMaster });
   return A;

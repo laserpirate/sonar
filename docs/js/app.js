@@ -4,6 +4,8 @@ import { Plant, LSystem, Turtle, makeRandom, DRAW } from "./lsys.js";
 import { Garden, LOOP_BARS, MAX_LAYERS, SCALE_NAMES, ARP_MODES, ARP_RATES, noteName } from "./garden.js";
 import { OscWs } from "./osc-ws.js";
 import { Stage } from "./stage.js";
+import { addPanel, group, slider, select, buttons, button, note, refreshAll, openPanel, togglePanel, applyDefaultPanels, controls } from "./ui.js";
+import { initGestures } from "./gestures.js";
 
 const q = new URLSearchParams(location.search);
 const catalog = await (await fetch(new URL("./catalog.json", import.meta.url))).json();
@@ -191,6 +193,10 @@ export const act = {
     if (live()) { link.send(`/param/plant${S.active}_angle`, [deg]); return; }
     plants[k].setAngle(deg);
   },
+  // drawn length of the active plant, relative to its preset (the device has no param for it)
+  length(v) { plants[S.active - 1].userScale = Math.max(0.35, Math.min(1.6, v)); },
+  palette() { openPanel("plants"); document.getElementById("palette")?.scrollIntoView?.({ block: "nearest" }); },
+  engineCycle() { const A = S.audio; if (!A) return; A.engine = { saw: "rain", rain: "both", both: "saw" }[A.engine] || "saw"; document.getElementById("b-engine").textContent = A.engine; },
   bpm(v) {
     const b = Math.round(Math.max(20, Math.min(300, v)));
     if (b === S.bpm) return;
@@ -241,8 +247,8 @@ window.addEventListener("keydown", (e) => {
     l: () => act.addLayer(), L: () => act.addLayer(), c: () => act.clearLayers(), C: () => act.clearLayers(),
     a: () => act.arpCycle(), A: () => act.arpCycle(),
     "1": () => act.plant(1), "2": () => act.plant(2), Tab: () => act.plantNext(), m: () => act.mode(), M: () => act.mode(),
-    h: () => toggleHud(), H: () => toggleHud(),
-    f: () => fullscreen(), F: () => fullscreen(), "?": () => keysBox.classList.toggle("show"),
+    h: () => toggleHud(), H: () => toggleHud(), e: () => act.engineCycle(), E: () => act.engineCycle(),
+    f: () => fullscreen(), F: () => fullscreen(), "?": () => { openPanel("more"); keysBox.classList.toggle("show"); },
     ArrowLeft: () => act.preset(-1), ArrowRight: () => act.preset(1),
     ArrowUp: () => act.bpm(S.bpm + 2), ArrowDown: () => act.bpm(S.bpm - 2),
   };
@@ -259,68 +265,97 @@ function fullscreen() {
 
 // ------------------------------------------------------------------ HUD
 const hud = document.getElementById("hud");
-const keysBox = document.getElementById("keys");
 const $ = (id) => document.getElementById(id);
 $("b-play").onclick = () => act.play();
-$("b-gen").onclick = () => act.nextGen();
-$("b-reset").onclick = () => act.reset();
 $("b-reseed").onclick = () => act.reseed();
 $("b-layer").onclick = () => act.addLayer();
 $("b-clear").onclick = () => act.clearLayers();
-$("b-mode").onclick = () => act.mode();
-$("b-keys").onclick = () => keysBox.classList.toggle("show");
 for (const b of hud.querySelectorAll("button")) b.addEventListener("keydown", (e) => { if (e.key === " ") e.preventDefault(); });
+for (const [id, label, fire] of [["b-play", "play", () => act.play()], ["b-reseed", "reseed", () => act.reseed()], ["b-layer", "+ loop", () => act.addLayer()], ["b-clear", "clear loops", () => act.clearLayers()]]) controls.set(id, { id, label, kind: "act", fire, panel: "transport" });
 
-// sliders and menus (second row)
-const r = (id) => $(id);
-r("r-bpm").value = S.bpm;
-r("r-bpm").oninput = (e) => act.bpm(Number(e.target.value));
-r("r-pitch").value = G.pitch;
-r("r-pitch").oninput = (e) => act.pitch(Number(e.target.value));
-r("r-delay").value = S.delay;
-r("r-delay").oninput = (e) => act.delay(Number(e.target.value));
-r("r-growth").value = G.growth;
-r("r-growth").oninput = (e) => act.growth(Number(e.target.value));
-const selRoot = r("s-root"), selScale = r("s-scale"), selArp = r("s-arp"), selRate = r("s-arprate"), selOct = r("s-arpoct");
-for (let n = 33; n <= 60; n++) { const o = document.createElement("option"); o.value = n; o.textContent = noteName(n); selRoot.appendChild(o); }
-for (const s of SCALE_NAMES) { const o = document.createElement("option"); o.value = s; o.textContent = s; selScale.appendChild(o); }
-for (const m of ARP_MODES) { const o = document.createElement("option"); o.value = m; o.textContent = m; selArp.appendChild(o); }
-for (const m of Object.keys(ARP_RATES)) { const o = document.createElement("option"); o.value = m; o.textContent = m; selRate.appendChild(o); }
-for (const n of [1, 2, 3]) { const o = document.createElement("option"); o.value = n; o.textContent = n + " oct"; selOct.appendChild(o); }
-selRoot.onchange = (e) => act.key(Number(e.target.value), undefined);
-selScale.onchange = (e) => act.key(undefined, e.target.value);
-selArp.onchange = (e) => act.arp({ mode: e.target.value });
-selRate.onchange = (e) => act.arp({ rate: e.target.value });
-selOct.onchange = (e) => act.arp({ octaves: Number(e.target.value) });
-// a control that has been touched gives the keys back to the page
-for (const s of [selRoot, selScale, selArp, selRate, selOct]) s.addEventListener("change", () => s.blur());
-for (const el of hud.querySelectorAll("input[type=range]")) el.addEventListener("change", () => el.blur());
+const signed = (x) => (x > 0 ? "+" : "") + x;
+const angleOf = () => plants[S.active - 1].angle ?? 0;
+const lengthOf = () => plants[S.active - 1].userScale ?? 1;
+const pTempo = addPanel("tempo", "tempo", { open: true });
+group(pTempo, "tempo and key");
+slider(pTempo, { id: "r-bpm", label: "bpm", min: 20, max: 300, get: () => S.bpm, set: (v) => act.bpm(v) });
+slider(pTempo, { id: "r-pitch", label: "pitch", min: -24, max: 24, get: () => G.pitch, set: (v) => act.pitch(v), fmt: signed });
+const rootOpts = []; for (let n = 33; n <= 60; n++) rootOpts.push([n, noteName(n)]);
+select(pTempo, { id: "s-root", label: "root", options: rootOpts, get: () => G.key.root, set: (v) => act.key(v, undefined) });
+select(pTempo, { id: "s-scale", label: "scale", options: SCALE_NAMES, get: () => G.key.scale, set: (v) => act.key(undefined, v) });
+slider(pTempo, { id: "r-growth", label: "growth", min: 0, max: 8, get: () => G.growth, set: (v) => act.growth(v), fmt: (x) => (x ? x + " bar" : "off") });
 
+const pArp = addPanel("arp", "arp", { open: true });
+group(pArp, "arp");
+select(pArp, { id: "s-arp", label: "mode", options: ARP_MODES, get: () => G.arp.mode, set: (v) => act.arp({ mode: v }) });
+select(pArp, { id: "s-arprate", label: "rate", options: Object.keys(ARP_RATES), get: () => G.arp.rate, set: (v) => act.arp({ rate: v }) });
+select(pArp, { id: "s-arpoct", label: "octaves", options: [[1, "1 oct"], [2, "2 oct"], [3, "3 oct"]], get: () => G.arp.octaves, set: (v) => act.arp({ octaves: v }) });
+
+const pDelay = addPanel("delay", "delay", { open: true });
+group(pDelay, "delay");
+slider(pDelay, { id: "r-delay", label: "amount", min: 0, max: 1, step: 0.01, get: () => S.delay, set: (v) => act.delay(v), fmt: (x) => x.toFixed(2) });
+
+const pPlants = addPanel("plants", "plants", { open: true });
+group(pPlants, "plant");
+buttons(pPlants, [
+  { id: "b-p1", label: "1", title: "1", fire: () => act.plant(1), on: () => S.active === 1, label2: "plant 1" },
+  { id: "b-p2", label: "2", title: "2", fire: () => act.plant(2), on: () => S.active === 2, label2: "plant 2" },
+  { id: "b-prev", label: "prev", title: "Left", fire: () => act.preset(-1), label2: "preset prev" },
+  { id: "b-next", label: "next", title: "Right", fire: () => act.preset(1), label2: "preset next" },
+]);
+slider(pPlants, { id: "r-angle", label: "angle", min: -360, max: 360, get: () => angleOf(), set: (v) => act.angle(v), fmt: (x) => Math.round(x) + " deg", random: false });
+slider(pPlants, { id: "r-length", label: "length", min: 0.35, max: 1.6, step: 0.01, get: () => lengthOf(), set: (v) => act.length(v), fmt: (x) => x.toFixed(2), random: false });
+buttons(pPlants, [
+  { id: "b-gen", label: "next gen", title: "N or two-finger tap", fire: () => act.nextGen() },
+  { id: "b-palette", label: "palette", title: "long press a plant", fire: () => act.palette(), noMap: true },
+]);
+
+const pMore = addPanel("more", "more");
+group(pMore, "output");
+slider(pMore, { id: "r-master", label: "vol", min: 0, max: 1, step: 0.01, get: () => S.master ?? 0.7, set: (v) => { S.master = v; emit("state", S); }, fmt: (x) => x.toFixed(2), random: false });
+buttons(pMore, [
+  { id: "b-engine", label: "saw", title: "E", fire: () => act.engineCycle() },
+  { id: "b-reset", label: "reset", title: "Shift+R", fire: () => act.reset() },
+  { id: "b-mode", label: "wall", title: "M", fire: () => act.mode(), noMap: true },
+  { id: "b-hide", label: "hide", title: "H; tap the empty stage to bring the controls back", fire: () => toggleHud(), noMap: true },
+  { id: "b-full", label: "full", title: "F", fire: () => fullscreen(), noMap: true },
+  { id: "b-keys", label: "keys", title: "?", fire: () => $("keys").classList.toggle("show"), noMap: true },
+]);
+const keysBox = document.createElement("div");
+keysBox.id = "keys";
+const KEY_ROWS = [["Space", "play"], ["N", "next gen"], ["R", "reseed (new seed, new plants)"], ["L", "+ loop: a seeded 4 bar layer from the next bar"], ["C", "clear loops"], ["Shift+R", "reset the plants"], ["A", "arp mode"], ["Up Down", "bpm"], ["1 2 Tab", "plant"], ["Left Right", "preset"], ["M", "norns / wall"], ["B", "blackout"], ["Esc hold 1 s", "panic"], ["H", "hide controls"], ["F", "full screen"], ["W S D", "kodama phase (?kodama=1)"], ["E", "engine"]];
+const keysTable = document.createElement("table");
+for (const [k, d] of KEY_ROWS) { const tr = keysTable.insertRow(); tr.insertCell().textContent = k; tr.insertCell().textContent = d; }
+keysBox.appendChild(keysTable);
+pMore.appendChild(keysBox);
+const demosLink = document.createElement("div"); demosLink.className = "note";
+demosLink.innerHTML = '<a href="demos/">demos</a>';
+pMore.appendChild(demosLink);
+applyDefaultPanels();
+window.__panels = { openPanel, togglePanel };
+
+// only write the strip when its text changed: no layout work at rest
+const setHtml = (id, html) => { const el = $(id); if (el && el.__h !== html) { el.innerHTML = html; el.__h = html; } };
 function hudUpdate() {
-  $("f-src").textContent = S.source;
+  if ($("f-src").textContent !== S.source) $("f-src").textContent = S.source;
   for (const id of [1, 2]) {
     const g = S.lastGen[id];
     const ins = live() ? (g && g.instr ? pid(g.instr) : "") : pid(G.instr[id - 1]);
-    $("f-p" + id).innerHTML = `${id}${S.active === id ? "*" : ""} <b>${ins}</b> g${g ? g.gen : "-"}/${g ? g.max : "-"}`;
+    setHtml("f-p" + id, `${id}${S.active === id ? "*" : ""} <b>${ins}</b> g${g ? g.gen : "-"}/${g ? g.max : "-"}`);
   }
   const ln = S.lastNote;
-  $("f-note").innerHTML = ln ? `note <b>${ln.note}</b> ${noteName(ln.note)}${ln.arp ? " arp" : ln.layer ? " loop" : ""}` : "note <b>-</b>";
-  $("f-bpm").innerHTML = `<b>${S.bpm}</b> bpm`;
-  $("f-seed").innerHTML = `seed <b>${S.seed}</b>`;
-  $("f-loops").innerHTML = `loops <b>${G.layers.length}</b>/${MAX_LAYERS} · ${LOOP_BARS} bar`;
-  const out = S.audio ? (S.outDb > -200 ? `out <b>${Math.max(-99, Math.round(S.outDb))}</b> dB` : "out <b>-</b>") : "";
-  $("f-out").innerHTML = out;
+  setHtml("f-note", ln ? `note <b>${ln.note}</b> ${noteName(ln.note)}${ln.arp ? " arp" : ln.layer ? " loop" : ""}` : "note <b>-</b>");
+  setHtml("f-bpm", `<b>${S.bpm}</b> bpm`);
+  setHtml("f-seed", `seed <b>${S.seed}</b>`);
+  setHtml("f-loops", `loops <b>${G.layers.length}</b>/${MAX_LAYERS} · ${LOOP_BARS} bar`);
+  setHtml("f-out", S.audio ? (S.outDb > -200 ? `out <b>${Math.max(-99, Math.round(S.outDb))}</b> dB` : "out <b>-</b>") : "");
   $("f-nosig").classList.toggle("show", !!S.outSilent);
   $("b-play").classList.toggle("on", S.playing);
-  $("b-mode").textContent = S.mode;
-  $("v-bpm").textContent = S.bpm; $("v-pitch").textContent = (G.pitch > 0 ? "+" : "") + G.pitch;
-  $("v-delay").textContent = S.delay.toFixed(2); $("v-growth").textContent = G.growth ? G.growth + " bar" : "off";
-  if (document.activeElement !== r("r-bpm")) r("r-bpm").value = S.bpm;
-  if (selRoot.value !== String(G.key.root)) selRoot.value = String(G.key.root);
-  if (selScale.value !== G.key.scale) selScale.value = G.key.scale;
-  if (selArp.value !== G.arp.mode) selArp.value = G.arp.mode;
-  if (selRate.value !== G.arp.rate) selRate.value = G.arp.rate;
-  if (selOct.value !== String(G.arp.octaves)) selOct.value = String(G.arp.octaves);
+  if ($("b-play").textContent !== (S.playing ? "stop" : "play")) $("b-play").textContent = S.playing ? "stop" : "play";
+  if ($("b-mode").textContent !== S.mode) $("b-mode").textContent = S.mode;
+  const m = S.outDb > -60 ? (S.outDb + 60) / 60 : 0;
+  $("meter").firstChild.style.transform = `scaleY(${S.audio ? Math.min(1, m).toFixed(3) : 0})`;
+  refreshAll();
 }
 setInterval(hudUpdate, 200);
 
@@ -359,6 +394,7 @@ function resize() {
   }
 }
 function toggleHud() { hud.classList.toggle("hidden"); resize(); }
+
 window.addEventListener("resize", resize);
 if (window.ResizeObserver) new ResizeObserver(resize).observe(stageEl);
 
@@ -390,7 +426,7 @@ function drawNorns() {
 
 const reduceMotion = !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches);
 function stageItems() {
-  return G.geometry().map((d) => ({ ...d, group: d.layer ? 2 - (d.layer.serial % 2) : d.id, dim: d.layer ? 0.55 : 0, scale: d.layer ? 0.8 : 1 }));
+  return G.geometry().map((d) => ({ ...d, group: d.layer ? 2 - (d.layer.serial % 2) : d.id, dim: d.layer ? 0.55 : 0, scale: d.layer ? 0.8 : 1, size: d.layer ? undefined : d.plant.userScale ?? 1 }));
 }
 function drawWall(t) {
   const W = canvas.width, H = canvas.height;
@@ -458,13 +494,9 @@ function frame(t) {
   }
 }
 
-// tap or click selects the plant under it
-canvas.addEventListener("click", (e) => {
-  if (S.mode === "norns") return;
-  const r = canvas.getBoundingClientRect();
-  const id = stage.pick((e.clientX - r.left) * (canvas.width / r.width), (e.clientY - r.top) * (canvas.height / r.height));
-  if (id) act.plant(id);
-});
+initGestures({ canvas, pick: (x, y) => stage.pick(x, y), act, S, angleOf, lengthOf,
+  onLongPress: () => act.palette(),
+  onEmptyTap: () => { if (hud.classList.contains("hidden")) toggleHud(); } });
 
 // ------------------------------------------------------------------ start
 if (wsUrl) S.source = "connecting"; // until the bridge answers, show the sim garden still
@@ -485,8 +517,7 @@ $("b-enable").onclick = async () => {
   }
   $("b-enable").disabled = false;
 };
-$("r-master").oninput = (e) => emit("state", Object.assign(S, { master: Number(e.target.value) }));
-S.master = Number($("r-master").value);
+S.master = S.master ?? 0.7;
 
 // ?kodama=1: phase presets W S D (Tier 4)
 // ?score=1: the ambient score on a synthetic scene (score-page.js)

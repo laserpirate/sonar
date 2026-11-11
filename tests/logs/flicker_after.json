@@ -7,28 +7,28 @@
   "strayAt": [],
   "shiftMax": 0,
   "blank": 0,
-  "inkMin": 9793,
-  "inkMax": 9793,
+  "inkMin": 14447,
+  "inkMax": 14447,
   "nudges": 0,
   "thetaMoves": 0,
   "hudJumps": 0
  },
  "desktop_seed42:b": {
   "frames": 60,
-  "changedMax": 6876,
+  "changedMax": 9733,
   "strayMax": 0,
   "strayFrames": 0,
   "strayAt": [],
   "shiftMax": 0,
   "blank": 0,
-  "inkMin": 9965,
-  "inkMax": 10585,
+  "inkMin": 14629,
+  "inkMax": 15495,
   "nudges": 0,
   "thetaMoves": 0,
   "hudJumps": 0
  },
  "desktop_seed42:c": {
-  "inkRightAfterResize": 10045
+  "inkRightAfterResize": 14789
  },
  "desktop_dpr2_seed7:a": {
   "frames": 30,
@@ -38,28 +38,28 @@
   "strayAt": [],
   "shiftMax": 0,
   "blank": 0,
-  "inkMin": 32958,
-  "inkMax": 32958,
+  "inkMin": 32042,
+  "inkMax": 32042,
   "nudges": 0,
   "thetaMoves": 0,
   "hudJumps": 0
  },
  "desktop_dpr2_seed7:b": {
   "frames": 60,
-  "changedMax": 36101,
+  "changedMax": 38212,
   "strayMax": 0,
   "strayFrames": 0,
   "strayAt": [],
   "shiftMax": 0,
   "blank": 0,
-  "inkMin": 34304,
-  "inkMax": 41897,
+  "inkMin": 33350,
+  "inkMax": 41797,
   "nudges": 0,
   "thetaMoves": 0,
   "hudJumps": 0
  },
  "desktop_dpr2_seed7:c": {
-  "inkRightAfterResize": 41802
+  "inkRightAfterResize": 42106
  },
  "phone_seed42:a": {
   "frames": 30,
@@ -69,32 +69,32 @@
   "strayAt": [],
   "shiftMax": 0,
   "blank": 0,
-  "inkMin": 14271,
-  "inkMax": 14271,
+  "inkMin": 23715,
+  "inkMax": 23715,
   "nudges": 0,
   "thetaMoves": 0,
   "hudJumps": 0
  },
  "phone_seed42:b": {
   "frames": 60,
-  "changedMax": 11749,
+  "changedMax": 17855,
   "strayMax": 0,
   "strayFrames": 0,
   "strayAt": [],
   "shiftMax": 0,
   "blank": 0,
-  "inkMin": 14945,
-  "inkMax": 16676,
+  "inkMin": 24376,
+  "inkMax": 27592,
   "nudges": 0,
   "thetaMoves": 0,
   "hudJumps": 0
  },
  "phone_seed42:c": {
-  "inkRightAfterResize": 14936
+  "inkRightAfterResize": 24550
  },
  "sway:b": {
-  "maxStepPx": 0.139,
-  "totalPx": 5.07
+  "maxStepPx": 0.141,
+  "totalPx": 5.48
  },
  "sway:a": {
   "frames": 20,
@@ -104,8 +104,8 @@
   "strayAt": [],
   "shiftMax": 0,
   "blank": 0,
-  "inkMin": 9950,
-  "inkMax": 9950,
+  "inkMin": 13883,
+  "inkMax": 13883,
   "nudges": 0,
   "thetaMoves": 0,
   "hudJumps": 0

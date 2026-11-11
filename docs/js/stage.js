@@ -58,7 +58,7 @@ export function arrange(items, W, H) {
       m.ki = (m.it.scale ?? 1) / Math.max(m.bw, m.bh, 1e-6);
       gw = Math.max(gw, m.bw * m.ki); gh = Math.max(gh, m.bh * m.ki);
     }
-    const gk = Math.min(cw / gw, ch / gh);
+    const gk = Math.min(cw / gw, ch / gh) * (list[0].it.size ?? 1);
     const w = gw * gk, h = gh * gk;
     const cx = portrait ? 0 : cursor + w / 2, cy = portrait ? cursor + h / 2 : 0;
     cursor += (portrait ? h : w) + gap;
@@ -112,7 +112,7 @@ export class Stage {
     const W = this.canvas.width, H = this.canvas.height;
     this.t = t;
     this.items = items;
-    const sig = W + "x" + H + "|" + items.map((i) => `${i.id}:${i.rev}:${i.group}:${i.scale ?? 1}`).join(",") + "|" + (this.arrangeKey || "");
+    const sig = W + "x" + H + "|" + items.map((i) => `${i.id}:${i.rev}:${i.group}:${i.scale ?? 1}:${i.size ?? 1}`).join(",") + "|" + (this.arrangeKey || "");
     if (sig !== this.sig) {
       this.sig = sig;
       const { fit, map } = arrangeFn(items, W, H);

@@ -1,0 +1,59 @@
+{
+ "iphone13-portrait": {
+  "browser": "webkit",
+  "stageShare": 0.55,
+  "stageH": 365,
+  "stageW": 390,
+  "vv": {
+   "w": 390,
+   "h": 664
+  },
+  "minFont": 16,
+  "small": []
+ },
+ "iphone13-landscape": {
+  "browser": "webkit",
+  "stageShare": 0.573,
+  "stageH": 342,
+  "stageW": 430,
+  "vv": {
+   "w": 750,
+   "h": 342
+  },
+  "minFont": 16,
+  "small": []
+ },
+ "ipad": {
+  "browser": "webkit",
+  "stageShare": 0.55,
+  "stageH": 594,
+  "stageW": 810,
+  "vv": {
+   "w": 810,
+   "h": 1080
+  },
+  "minFont": 16,
+  "small": []
+ },
+ "desktop-1280": {
+  "browser": "chromium",
+  "stageShare": 0.734,
+  "stageH": 720,
+  "stageW": 940,
+  "vv": {
+   "w": 1280,
+   "h": 720
+  },
+  "minFont": 18,
+  "small": [
+   "tab-tempo 76x36",
+   "tab-arp 54x36",
+   "tab-delay 69x36",
+   "tab-plants 73x36",
+   "tab-more 68x36",
+   "r-bpm 315x28",
+   "r-pitch 315x28",
+   "s-root 70x36"
+  ]
+ }
+}

@@ -13,7 +13,7 @@ const ROOT = resolve(here, "..", flag("dir", "docs"));
 const PORT = Number(flag("port", 8080));
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8",
   ".json": "application/json", ".css": "text/css", ".mp3": "audio/mpeg", ".png": "image/png", ".svg": "image/svg+xml",
-  ".txt": "text/plain; charset=utf-8", ".wav": "audio/wav" };
+  ".txt": "text/plain; charset=utf-8", ".wav": "audio/wav", ".webmanifest": "application/manifest+json" };
 
 http.createServer(async (req, res) => {
   try {
