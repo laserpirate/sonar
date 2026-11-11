@@ -1,7 +1,7 @@
 // app.js · sonar page: renderer + sim garden (garden.js) + live (OSC over WebSocket) + keys + controls.
 // Audio engines and MIDI load only after the Enable click (audio.js, midi.js).
 import { Plant, LSystem, Turtle, makeRandom, DRAW } from "./lsys.js";
-import { Garden, LOOP_BARS, MAX_LAYERS, MAX_FOREST, SCALE_NAMES, ARP_MODES, ARP_RATES, ARP_ENGINES, noteName, hashSeed, validatePlant } from "./garden.js";
+import { Garden, LOOP_BARS, MAX_LAYERS, MAX_FOREST, SCALE_NAMES, ARP_MODES, ARP_RATES, ARP_ENGINES, noteName, hashSeed, validatePlant, PLANT_ALPHABET } from "./garden.js";
 import { ARCHETYPES } from "./roots.js";
 import { initPalette } from "./palette.js";
 import { BUILTIN, specOf, isSample } from "./voices.js";
@@ -12,6 +12,8 @@ import { addPanel, group, slider, select, buttons, button, note, refreshAll, ope
 import { initGestures } from "./gestures.js";
 import { setupLabel, encodeSetup, decodeSetup, createStore, exportText, parseImport } from "./setups.js";
 import { createMapper, describe, DEFAULT_V020 } from "./midimap.js";
+import { createBus } from "./bus.js";
+import { parseVanaPath, vanaSlotToRoots, phyllaToPlant } from "./vana.js";
 
 const q = new URLSearchParams(location.search);
 const catalog = await (await fetch(new URL("./catalog.json", import.meta.url))).json();
@@ -129,6 +131,7 @@ function noteEvent(ev) {
 
 // ------------------------------------------------------------------ live (bridge)
 let link = null;
+let vanaHook = null; // set by the bus section below: VANA's /phylla/ messages
 const wsUrl = q.get("ws");
 function liveMessage(path, a) {
   switch (path) {
@@ -141,7 +144,7 @@ function liveMessage(path, a) {
     case "/sonar/hb": S.hb = a[0]; if (a[1] > 0) S.bpm = Math.round(a[1]); break;
     case "/av/weather": if (S.flags.shanshui) S.weather = clamp01(a[0]); break;
     case "/av/flood": if (S.flags.shanshui) S.flood = clamp01(a[0]); break;
-    default: break;
+    default: if (vanaHook && path.startsWith("/phylla/")) vanaHook(path, a); break;
   }
 }
 const clamp01 = (v) => Math.max(0, Math.min(1, Number(v) || 0));
@@ -624,16 +627,29 @@ buttons(pSetups, [
 ]);
 const importBox = Object.assign(document.createElement("input"), { type: "file", accept: ".json,application/json", multiple: true, id: "f-setup-import" });
 importBox.style.display = "none"; pSetups.appendChild(importBox);
+// a Phylla JSON export (VANA): a user plant when its word fits flora's alphabet; otherwise say why
+function importPhylla(j) {
+  const r = phyllaToPlant(j, { alphabet: PLANT_ALPHABET });
+  const rootsTxt = r.roots?.roots?.archetype ? `, roots ${r.roots.roots.archetype}` : r.roots?.unmapped ? `, roots ${r.roots.unmapped} have no counterpart` : "";
+  if (!r.ok) return r.why;
+  const v = validatePlant(r.def);
+  if (!v.ok) return "Phylla plant: " + v.errors.join(", ") + "; not imported";
+  plantStore.put(r.name, v.def);
+  return `Phylla plant ${r.name} in the palette${rootsTxt}`;
+}
 async function importFiles(files) {
-  let n = 0;
+  let n = 0, phyllaMsg = "";
   try {
     for (const f of files) {
-      const list = parseImport(await f.text());
+      const text = await f.text();
+      let j = null; try { j = JSON.parse(text); } catch {}
+      if (j && !Array.isArray(j) && Array.isArray(j.word)) { phyllaMsg = importPhylla(j); continue; }
+      const list = parseImport(text);
       for (const x of list) { G._cleanSetup(x.setup); store.put(x.name || store.nextSlot(), x.setup); n++; }
       for (const pl of list.plants) { const v = validatePlant(pl.def); if (v.ok) plantStore.put(pl.name || "u" + (plantStore.list().length + 1), v.def); }
     }
     pal.fillUsers();
-    say(`imported ${n}`);
+    say(phyllaMsg && !n ? phyllaMsg : `imported ${n}` + (phyllaMsg ? "; " + phyllaMsg : ""));
   } catch (e) { say(`imported ${n}, then a file was not readable`); }
   refillSaved();
 }
@@ -687,6 +703,67 @@ pMore.appendChild(keysBox);
 const demosLink = document.createElement("div"); demosLink.className = "note";
 demosLink.innerHTML = '<a href="demos/">demos</a>';
 pMore.appendChild(demosLink);
+// ------------------------------------------------------------------ bus: sonar drives the visuals (bus.js), VANA drives the roots (vana.js)
+const bus = createBus({ link });
+window.__bus = bus;
+bus.on = q.get("bus") === "1";
+S.vanaIn = q.get("vana") === "1";
+const isLead = (ev) => !ev.arp && !ev.chorus && !ev.bass && !ev.layer && !ev.flourish;
+on("note", (ev) => { if (bus.on && !ev.silent && !S.panic) bus.note(ev.engine || "saw", ev.plant, ev.note, ev.freq, ev.vel ?? 0.8, isLead(ev)); });
+on("gen", (g) => { if (bus.on) bus.gen(g.plant, g.gen, g.max); });
+let busBeat = null, busState = "";
+setInterval(() => {
+  if (!bus.on) { busBeat = null; return; }
+  if (S.playing && !S.panic) {
+    const b = Math.floor(nowBeats());
+    if (busBeat === null) busBeat = b;
+    else if (b !== busBeat) { busBeat = b; bus.beat(b, Math.floor(b / 4), S.bpm); }
+  } else busBeat = null;
+}, 5);
+setInterval(() => { if (bus.on && S.audio?.levels) { const L = S.audio.levels(); bus.level(L.rms, L.peak, L.bands); } }, 33);
+const busStateNow = () => {
+  if (!bus.on) return;
+  const key = `${noteName(G.key.root).replace(/-?\d+$/, "")} ${G.key.scale}`, setup = S.factoryIx >= 0 && factory[S.factoryIx] ? setupLabel(factory[S.factoryIx]) : "";
+  const sig = JSON.stringify([key, G.forest.density, G.plants.length, setup]);
+  if (sig !== busState) { busState = sig; bus.state(key, G.forest.density, G.plants.length, setup); }
+};
+on("state", busStateNow);
+setInterval(busStateNow, 1000);
+// VANA: /phylla/<slot>/root... on the bridge or on the bus, gathered per slot, applied ten times a second
+const vanaRaw = { 1: {}, 2: {}, 3: {}, 4: {} }, vanaPending = new Set();
+S.vana = { rx: 0, applied: 0, note: "" };
+const vanaIn = (path, args) => {
+  if (!S.vanaIn) return;
+  const p = parseVanaPath(path);
+  if (!p) return;
+  vanaRaw[p.slot][p.key] = args[0]; vanaPending.add(p.slot); S.vana.rx++;
+};
+vanaHook = vanaIn;
+bus.onIn((m) => { if (m && typeof m.path === "string" && m.path.startsWith("/phylla/")) vanaIn(m.path, Array.isArray(m.args) ? m.args : []); });
+setInterval(() => {
+  if (!vanaPending.size || live()) return;
+  for (const slot of vanaPending) {
+    if (slot > G.plants.length) continue;
+    const r = vanaSlotToRoots({ ...vanaRaw[slot], current: G.roots[slot]?.archetype });
+    if (r.roots === null) { S.vana.note = `slot ${slot}: ${r.unmapped} has no counterpart; roots unchanged`; continue; }
+    if (Object.keys(r.roots).length) G.setRoots(slot, r.roots);
+    if (r.bass !== undefined) G.setBass({ level: r.bass });
+    S.vana.applied++;
+  }
+  vanaPending.clear();
+  emit("state", S);
+}, 100);
+group(pMore, "bus");
+buttons(pMore, [
+  { id: "b-bus", label: "bus", title: "send notes, beats and levels to other tabs (sonar-bus)", noMap: true, fire: () => { bus.on = !bus.on; busState = ""; busStateNow(); }, on: () => bus.on },
+  { id: "b-vana", label: "vana in", title: "VANA's /phylla/<slot>/root values set the roots of plants 1 to 4", noMap: true, fire: () => { S.vanaIn = !S.vanaIn; }, on: () => !!S.vanaIn },
+]);
+const busNote = note(pMore, "", "bus-note");
+onRefresh(() => {
+  const t = (bus.on ? `sent ${bus.sent.note} notes, ${bus.sent.beat} beats` : "bus off") + (S.vanaIn ? ` · vana ${S.vana.rx} in` + (S.vana.note ? `; ${S.vana.note}` : "") : "");
+  if (busNote.textContent !== t) busNote.textContent = t;
+});
+
 // ------------------------------------------------------------------ MIDI: bindings, learn, maps, out, clock (AV-STANDARD v02)
 // acts the page has beyond the panels' controls; bpm and angle keep v0.2.0's CC ranges
 const MIDI_CORE = {

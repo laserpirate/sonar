@@ -3,6 +3,7 @@
 // and WebSocket JSON (from the browser) -> UDP OSC (to norns).
 //
 //   node bridge.mjs [--udp 57120] [--ws 8765] [--norns 192.168.1.50] [--norns-port 10111] [--verbose]
+//                   [--bus-udp 127.0.0.1:7000]   sonar bus messages (/sonarbus/...) also go out as OSC there
 //
 // Binds 127.0.0.1 only. The browser connects to ws://127.0.0.1:8765.
 // Messages on the wire are {"path": "/sonar/note", "args": [1, 12, 60, 261.6, 40, 20, 0.25]}.
@@ -25,6 +26,7 @@ const NORNS_IP = flag("norns", process.env.SONAR_NORNS_IP || "");
 const NORNS_PORT = Number(flag("norns-port", 10111));
 const VERBOSE = argv.includes("--verbose");
 const SHANSHUI = argv.includes("--shanshui");
+const BUS_UDP = (() => { const v = flag("bus-udp", ""); const m = /^([\w.-]+):(\d+)$/.exec(v); return m ? { host: m[1], port: Number(m[2]) } : null; })();
 
 const stats = { udpIn: 0, wsOut: 0, wsIn: 0, udpOut: 0, clients: 0, lastNornsFrom: null };
 
@@ -81,6 +83,8 @@ wss.on("connection", (ws) => {
         console.log("drop (no norns ip yet)", m.path);
       }
     }
+    // the sonar bus out as OSC (TouchDesigner, a second machine), only with --bus-udp
+    if (BUS_UDP && m.path.startsWith("/sonarbus/")) { try { udpSend(Buffer.from(encode(m.path, args)), BUS_UDP.port, BUS_UDP.host); stats.busOut = (stats.busOut || 0) + 1; } catch {} }
     // echo to other browser clients (renderer <-> controller without hardware)
     const json = JSON.stringify({ path: m.path, args, from: "ws", t: Date.now() });
     for (const c of wss.clients) if (c !== ws && c.readyState === 1) c.send(json);

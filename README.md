@@ -180,6 +180,47 @@ Check: `node tools/score_norns_check.mjs 60 shanshui` runs the score in real tim
 
 `?kodama=1`: keys W, S, D pick the Wet, Shed, Dry phase presets (rqmin, rqmax, cf scalar, note duration), applied to the browser engine in sim and sent as `/param/*` to norns in live.
 
+## The sonar bus
+
+Off until the `bus` button (more tab) or `?bus=1`. sonar posts on the `BroadcastChannel` named `sonar-bus`, which reaches every tab of the same origin on the machine (all of `laserpirate.github.io`), no server. With `?ws=` the same messages go to the bridge as `{path: "/sonarbus/<t>", args}`; `node bridge/bridge.mjs --bus-udp 127.0.0.1:7000` also sends them out as OSC (TouchDesigner, a second machine). Absolute state, last write wins:
+
+| t | fields | when |
+| --- | --- | --- |
+| `note` | voice, plant, note, freq, vel, lead | every note that sounds |
+| `beat` | beat, bar, bpm | every beat while playing |
+| `gen` | plant, gen, max | a plant grows |
+| `level` | rms, peak, bands [low, mid, high], 0..1 | about 30 a second, after Enable |
+| `state` | key, density, forest, setup | on change |
+| `macro` | name, value | when a macro moves |
+
+`docs/js/sonar-in.js` is the receiver. It has no imports and no flora-derived code; copy it into any page.
+
+```html
+<script type="module">
+  import { createSonarIn } from "https://laserpirate.github.io/sonar/js/sonar-in.js";
+  const sonar = createSonarIn({ stale: 2000 });   // or { ws: "ws://127.0.0.1:8765" } through the bridge
+  const ring = document.querySelector("#ring");
+  sonar.on("note", (m) => {
+    if (!m.lead) return;                             // lead notes only, not arps or chorus
+    ring.animate([{ transform: "scale(1)", opacity: 1 }, { transform: "scale(3)", opacity: 0 }], 900);
+  });
+  sonar.on("beat", (m) => { document.title = `bar ${m.bar} · ${m.bpm} bpm`; });
+  sonar.on("rest", () => { document.title = "sonar stopped"; });
+  function frame() {
+    // smoothed 0..1: level, low, mid, high; pulse is 1 on each beat and decays
+    ring.style.borderWidth = 1 + 12 * sonar.level + "px";
+    ring.style.opacity = 0.3 + 0.7 * sonar.pulse;
+    requestAnimationFrame(frame);
+  }
+  frame();
+</script>
+<div id="ring" style="width:80px;height:80px;border:1px solid #9FC8F0"></div>
+```
+
+When nothing arrives for `stale` ms, every value returns to rest and `rest` fires once.
+
+**VANA in** (`vana in` button or `?vana=1`, off by default): `/phylla/<slot>/root/archetype`, `/root/depth`, `/root/spread`, `/root/density`, `/root/rhizome_reach` and `/phylla/<slot>/root`, slots 1 to 4, on the bridge or the bus (`{path, args}` on `sonar-bus`), set the roots of plants 1 to 4 and the bass level. The archetype table is at the top of `docs/js/vana.js`; `prop` has no counterpart and leaves the roots alone. A Phylla JSON export dropped or imported on the setups tab becomes a user plant only when its `word` uses flora's alphabet and has at most 40 modules; otherwise the page says which symbols or limit failed.
+
 ## Tests and tools
 
 | tool | does |

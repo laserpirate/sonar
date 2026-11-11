@@ -15,7 +15,7 @@
  },
  "desktop_seed42:b": {
   "frames": 60,
-  "changedMax": 8712,
+  "changedMax": 9733,
   "strayMax": 0,
   "strayFrames": 0,
   "strayAt": [],
@@ -28,7 +28,7 @@
   "hudJumps": 0
  },
  "desktop_seed42:c": {
-  "inkRightAfterResize": 14792
+  "inkRightAfterResize": 14790
  },
  "desktop_dpr2_seed7:a": {
   "frames": 30,
@@ -46,20 +46,20 @@
  },
  "desktop_dpr2_seed7:b": {
   "frames": 60,
-  "changedMax": 36527,
+  "changedMax": 38201,
   "strayMax": 0,
   "strayFrames": 0,
   "strayAt": [],
   "shiftMax": 0,
   "blank": 0,
-  "inkMin": 33390,
-  "inkMax": 41758,
+  "inkMin": 33394,
+  "inkMax": 41829,
   "nudges": 0,
   "thetaMoves": 0,
   "hudJumps": 0
  },
  "desktop_dpr2_seed7:c": {
-  "inkRightAfterResize": 42123
+  "inkRightAfterResize": 42125
  },
  "phone_seed42:a": {
   "frames": 30,
@@ -77,24 +77,24 @@
  },
  "phone_seed42:b": {
   "frames": 60,
-  "changedMax": 18776,
+  "changedMax": 18265,
   "strayMax": 0,
   "strayFrames": 0,
   "strayAt": [],
   "shiftMax": 0,
   "blank": 0,
-  "inkMin": 24410,
-  "inkMax": 27592,
+  "inkMin": 24376,
+  "inkMax": 27627,
   "nudges": 0,
   "thetaMoves": 0,
   "hudJumps": 0
  },
  "phone_seed42:c": {
-  "inkRightAfterResize": 24531
+  "inkRightAfterResize": 24550
  },
  "sway:b": {
   "maxStepPx": 0.141,
-  "totalPx": 5.48
+  "totalPx": 5.49
  },
  "sway:a": {
   "frames": 20,
@@ -104,8 +104,8 @@
   "strayAt": [],
   "shiftMax": 0,
   "blank": 0,
-  "inkMin": 13874,
-  "inkMax": 13874,
+  "inkMin": 13885,
+  "inkMax": 13885,
   "nudges": 0,
   "thetaMoves": 0,
   "hudJumps": 0

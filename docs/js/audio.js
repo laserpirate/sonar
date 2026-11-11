@@ -66,6 +66,17 @@ export async function enable({ S, on, act }) {
     S.ctxState = ctx.state;
   };
   setInterval(meter, 250);
+  // the bus's level: rms and peak of the output and three bands, each 0..1 (-60 dB .. 0 dB; bands -90 .. -20 dB)
+  const fbuf = new Float32Array(an.frequencyBinCount), hzPer = ctx.sampleRate / an.fftSize;
+  const to01 = (db, lo, hi) => Math.max(0, Math.min(1, (db - lo) / (hi - lo)));
+  A.levels = () => {
+    an.getFloatTimeDomainData(buf);
+    let pk = 0, sq = 0; for (let i = 0; i < buf.length; i++) { const a = Math.abs(buf[i]); if (a > pk) pk = a; sq += buf[i] * buf[i]; }
+    an.getFloatFrequencyData(fbuf);
+    const band = (lo, hi) => { let s = 0, n = 0; for (let i = Math.max(1, Math.floor(lo / hzPer)); i < Math.min(fbuf.length, Math.ceil(hi / hzPer)); i++) { s += Math.pow(10, fbuf[i] / 10); n++; } return n ? to01(10 * Math.log10(s / n + 1e-20), -90, -20) : 0; };
+    const m = muted();
+    return { rms: m ? 0 : to01(20 * Math.log10(Math.sqrt(sq / buf.length) + 1e-12), -60, 0), peak: m ? 0 : to01(20 * Math.log10(pk + 1e-12), -60, 0), bands: m ? [0, 0, 0] : [band(20, 250), band(250, 2000), band(2000, 12000)] };
+  };
 
   document.getElementById("b-engine").textContent = G.engineMode;
 
