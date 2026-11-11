@@ -287,6 +287,7 @@ export function createChain(ctx, opts = {}) {
     if (C.countSpans) C.spans.push([when, when + (len || 0), v.id]);
     C.played++;
     C.playedBy[v.id] = (C.playedBy[v.id] || 0) + 1;
+    return { voice: v.id, len: len || 0 };
   };
   return C;
 }

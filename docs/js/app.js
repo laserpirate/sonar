@@ -11,6 +11,7 @@ import { Stage, arrangeForest } from "./stage.js";
 import { addPanel, group, slider, select, buttons, button, note, refreshAll, openPanel, togglePanel, applyDefaultPanels, controls, onRefresh, randomize } from "./ui.js";
 import { initGestures } from "./gestures.js";
 import { setupLabel, encodeSetup, decodeSetup, createStore, exportText, parseImport } from "./setups.js";
+import { createMapper, describe, DEFAULT_V020 } from "./midimap.js";
 
 const q = new URLSearchParams(location.search);
 const catalog = await (await fetch(new URL("./catalog.json", import.meta.url))).json();
@@ -163,6 +164,7 @@ function simTick() {
 
 // a setup lands on a bar line; the continuous parameters then glide for `morph` bars
 let pendingSetup = null, glide = null, glideEmit = 0;
+let onSetupMidi = null; // set by the MIDI panel below: a setup may carry its map
 const glideKeys = () => [
   [() => S.bpm, (v) => act.bpm(v)],
   ...ARP_ENGINES.flatMap((e) => [
@@ -186,6 +188,7 @@ function applySetup(s, at, bars) {
   if (bars > 0) { keys.forEach((k, i) => k[1](from[i])); glide = { at, len: bars * 4, keys, from, to }; }
   else act.bpm(G.bpm);
   S.delay = G.delays.saw.amount;
+  if (onSetupMidi) onSetupMidi();
   syncUrl();
   emit("state", S);
   if (G.samples.length && S.missingSamples) S.missingSamples().then((m) => { if (m.length) say("missing: " + m.map((x) => x.name).join(", ") + "; built-in voices play"); });
@@ -684,6 +687,116 @@ pMore.appendChild(keysBox);
 const demosLink = document.createElement("div"); demosLink.className = "note";
 demosLink.innerHTML = '<a href="demos/">demos</a>';
 pMore.appendChild(demosLink);
+// ------------------------------------------------------------------ MIDI: bindings, learn, maps, out, clock (AV-STANDARD v02)
+// acts the page has beyond the panels' controls; bpm and angle keep v0.2.0's CC ranges
+const MIDI_CORE = {
+  play: { label: "play", kind: "act", fire: () => act.play() },
+  stop: { label: "stop", kind: "act", fire: () => act.play(false) },
+  nextGen: { label: "next gen", kind: "act", fire: () => act.nextGen() },
+  reseed: { label: "reseed", kind: "act", fire: () => act.reseed() },
+  addLayer: { label: "+ loop", kind: "act", fire: () => act.addLayer() },
+  clearLayers: { label: "clear loops", kind: "act", fire: () => act.clearLayers() },
+  plantNext: { label: "next plant", kind: "act", fire: () => act.plantNext() },
+  arpCycle: { label: "arp mode", kind: "act", fire: () => act.arpCycle() },
+  blackout: { label: "blackout", kind: "toggle", get: () => !!S.blackoutOn, set: (v) => act.blackout(!!v) },
+  panic: { label: "panic", kind: "toggle", get: () => !!S.panic, set: (v) => act.panic(!!v) },
+  bpm: { label: "bpm 40-160", kind: "range", lo: 40, hi: 160, step: 0, get: () => S.bpm, set: (v) => act.bpm(v) },
+  angle: { label: "angle 0-120", kind: "range", lo: 0, hi: 120, step: 0, get: () => S.angleNow ?? 30, set: (v) => { S.angleNow = v; act.angle(v); } },
+};
+const midiTarget = (id) => {
+  if (MIDI_CORE[id]) return MIDI_CORE[id];
+  const c = controls.get(id);
+  if (!c) return null;
+  if (c.kind === "range") return { kind: "range", lo: c.lo, hi: c.hi, step: c.step, get: c.get, set: c.set };
+  if (c.kind === "select") return { kind: "select", options: c.options, get: c.get, set: c.set };
+  if (c.kind === "toggle") return { kind: "toggle", get: c.get, set: c.set };
+  if (c.kind === "act") return { kind: "act", fire: c.fire };
+  return null;
+};
+const mapper = createMapper({ resolve: midiTarget });
+act.midiMapper = () => mapper;
+window.__midiMap = mapper;
+const MIDI_KEY = "sonar-midi-v1" + (new URLSearchParams(location.search).get("i") ? "-" + new URLSearchParams(location.search).get("i").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 20) : "");
+const saveMidi = () => { G.midiMap = mapper.toJSON(); try { localStorage.setItem(MIDI_KEY, JSON.stringify(G.midiMap)); } catch {} };
+{
+  let stored = null;
+  try { stored = JSON.parse(localStorage.getItem(MIDI_KEY) || "null"); } catch {}
+  mapper.load(Array.isArray(stored) ? stored : DEFAULT_V020);
+  G.midiMap = mapper.toJSON();
+}
+// a setup that carries a map brings it; one that does not keeps the current map
+onSetupMidi = () => { if (G.midiMap) { mapper.load(G.midiMap); saveMidi(); } else G.midiMap = mapper.toJSON(); mapper.resetPickup(); renderMidi(); };
+
+const pMidi = addPanel("midi", "midi");
+const midiNote = note(pMidi, typeof navigator.requestMIDIAccess === "function" ? "MIDI starts with enable." : "Web MIDI is not in this browser; everything else works.", "midi-status");
+onRefresh(() => { const m = S.midi; if (m && m.status && typeof navigator.requestMIDIAccess === "function") { const t = `MIDI: ${m.status}`; if (midiNote.textContent !== t) midiNote.textContent = t; } });
+group(pMidi, "maps");
+const MAP_FILES = [["v020-notes", "v0.2.0 notes", "data/midi-maps/sonar_v020-notes_v01.json"], ["nanokontrol", "nanoKONTROL, verify with the wizard", "data/midi-maps/sonar_nanokontrol_v01.json"]];
+let mapPick = "v020-notes";
+select(pMidi, { id: "s-midimap", label: "map", options: MAP_FILES.map((x) => [x[0], x[1]]), get: () => mapPick, set: (v) => { mapPick = v; }, random: false });
+const midiSay = note(pMidi, "", "midi-note");
+let clearArmed = false;
+const midiFile = Object.assign(document.createElement("input"), { type: "file", accept: ".json,application/json", id: "f-midimap" });
+midiFile.style.display = "none"; pMidi.appendChild(midiFile);
+buttons(pMidi, [
+  { id: "b-midimap-load", label: "load", noMap: true, fire: async () => {
+    const f = MAP_FILES.find((x) => x[0] === mapPick);
+    try { const j = await (await fetch(f[2])).json(); mapper.load(j.bindings); saveMidi(); renderMidi(); midiSay.textContent = `loaded ${f[1]}`; } catch { midiSay.textContent = "map not readable"; }
+  } },
+  { id: "b-midi-clearall", label: "clear all", noMap: true, fire: () => {
+    const b = $("b-midi-clearall");
+    if (!clearArmed) { clearArmed = true; b.textContent = "clear all?"; setTimeout(() => { clearArmed = false; b.textContent = "clear all"; }, 3000); return; }
+    clearArmed = false; b.textContent = "clear all"; mapper.clearAll(); saveMidi(); renderMidi(); midiSay.textContent = "cleared";
+  } },
+  { id: "b-midi-export", label: "export", noMap: true, fire: () => download("av-bindings_sonar_v01.json", JSON.stringify({ format: "sonar midi map", v: 1, bindings: mapper.toJSON() }, null, 1)) },
+  { id: "b-midi-import", label: "import", noMap: true, fire: () => midiFile.click() },
+]);
+midiFile.onchange = async () => {
+  const f = midiFile.files[0]; midiFile.value = "";
+  if (!f) return;
+  try { const j = JSON.parse(await f.text()); const list = Array.isArray(j) ? j : j.bindings; if (!Array.isArray(list)) throw 0; mapper.load(list); saveMidi(); renderMidi(); midiSay.textContent = `imported ${mapper.bindings.length}`; } catch { midiSay.textContent = "not a midi map"; }
+};
+group(pMidi, "out and clock");
+S.midiOut = { port: "", notes: false, clock: false };
+const outSel = select(pMidi, { id: "s-midiout", label: "output", options: [["", "none"]], get: () => S.midiOut.port, set: (v) => { S.midiOut.port = v; }, random: false });
+const fillPorts = () => outSel.refill([["", "none"], ...(S.midi?.outputs || []).map((o) => [o.id, o.name || o.id])]);
+buttons(pMidi, [
+  { id: "b-midiout-notes", label: "notes out", noMap: true, fire: () => { S.midiOut.notes = !S.midiOut.notes; }, on: () => S.midiOut.notes },
+  { id: "b-midiout-clock", label: "clock out", noMap: true, fire: () => { S.midiOut.clock = !S.midiOut.clock; }, on: () => S.midiOut.clock },
+  { id: "b-midi-clockin", label: "clock in", noMap: true, fire: () => { S.clockIn = !S.clockIn; }, on: () => !!S.clockIn },
+]);
+note(pMidi, "out channels: saw 1, rain 2, pluck 3, sine 4, water 5, bass 6, sounds 7");
+group(pMidi, "bindings");
+const conflictNote = note(pMidi, "", "midi-conflicts");
+const mtab = document.createElement("div"); mtab.id = "midi-table"; mtab.className = "mtab"; pMidi.appendChild(mtab);
+const midiActs = () => [...Object.entries(MIDI_CORE).map(([id, t]) => [id, t.label]), ...[...controls.values()].map((c) => [c.id, c.label])];
+let shownLearn = -1, shownLearning = null;
+function renderMidi() {
+  if (!pMidi.classList.contains("open")) { shownLearn = -1; return; }
+  shownLearn = mapper.learned; shownLearning = mapper.learning;
+  const conflicts = mapper.conflicts(), inConflict = new Set(conflicts.flatMap((c) => c.acts));
+  conflictNote.textContent = conflicts.length ? "conflict: " + conflicts.map((c) => { const [t, ch, n] = c.key.split(":"); const names = new Map(midiActs()); return `${t} ${n}${Number(ch) >= 0 ? " ch" + (Number(ch) + 1) : ""} ${c.acts.map((a) => names.get(a) || a).join(", ")}`; }).join("; ") : "";
+  mtab.textContent = "";
+  for (const [id, label] of midiActs()) {
+    const row = document.createElement("div"); row.className = "mrow" + (inConflict.has(id) ? " conflict" : "");
+    const l = document.createElement("span"); l.textContent = label;
+    const bs = mapper.bindings.filter((b) => b.act === id);
+    const v = document.createElement("b"); v.textContent = bs.length ? bs.map(describe).join(" · ") : "-";
+    const lb = document.createElement("button"); lb.id = "learn-" + id; lb.textContent = mapper.learning === id ? "waiting" : "learn";
+    lb.classList.toggle("on", mapper.learning === id);
+    lb.onclick = () => { mapper.learn(mapper.learning === id ? null : id); renderMidi(); };
+    const cb = document.createElement("button"); cb.id = "unbind-" + id; cb.textContent = "clear"; cb.disabled = !bs.length;
+    cb.onclick = () => { mapper.clear(id); saveMidi(); renderMidi(); };
+    row.append(l, v, lb, cb); mtab.appendChild(row);
+  }
+}
+let savedLearned = 0;
+onRefresh(() => {
+  if (mapper.learned !== savedLearned) { savedLearned = mapper.learned; saveMidi(); }
+  if (mapper.learned !== shownLearn || mapper.learning !== shownLearning) renderMidi();
+  if (S.midi && !S.midi.onPorts) { S.midi.onPorts = fillPorts; fillPorts(); }
+});
+$("tab-midi").addEventListener("click", () => setTimeout(renderMidi, 0));
 applyDefaultPanels();
 window.__panels = { openPanel, togglePanel };
 

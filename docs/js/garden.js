@@ -12,6 +12,7 @@
 import { Plant, Sequencer, makeRandom, mtof, ftom, checkPlantPosition } from "./lsys.js";
 import { growRoots, ROOT_DEFAULT, BASS_DEFAULT, BASS_SYNCS, bassStep, ARCHETYPES } from "./roots.js";
 import { BUILTIN, voiceDefaults, cleanVoice, voiceLen, isSample } from "./voices.js";
+import { cleanMap } from "./midimap.js";
 export const PITCH_MODES = ["flora", "walk"];
 const FX_DEFAULT = () => ({ reverb: { amount: 0, size: 2.5 }, wind: { level: 0, tone: 700 } });
 
@@ -697,6 +698,7 @@ export class Garden {
       arps: { saw: arp(this.arps.saw), rain: arp(this.arps.rain) },
       delays: Object.fromEntries(Object.entries(this.delays).map(([k, d]) => [k, { ...d }])),
       sim: { ...this.simOpts }, midi: this.midiRef ?? null,
+      midiMap: this.midiMap ? this.midiMap.map((b) => ({ ...b })) : null,
     };
   }
   // a setup can come from a link or a file: check all of it before anything changes
@@ -729,6 +731,7 @@ export class Garden {
       arps: { saw: s.arps?.saw || {}, rain: s.arps?.rain || {} }, sim,
       delays: Object.fromEntries([["saw", delay(s.delays?.saw)], ["rain", delay(s.delays?.rain)], ...Object.entries(s.delays && typeof s.delays === "object" ? s.delays : {}).filter(([k]) => k !== "saw" && k !== "rain" && ([...BUILTIN, "bass"].includes(k) || isSample(k))).slice(0, 80).map(([k, d]) => [k, delay(d)])]),
       midi: typeof s.midi === "string" ? s.midi.slice(0, 80) : null,
+      midiMap: Array.isArray(s.midiMap) ? cleanMap(s.midiMap) : null,
       forest: { leads: Math.round(num(s.forest?.leads, 1, 4, 2)), density: num(s.forest?.density, 0, 1, 0.6), budget: Math.round(num(s.forest?.budget, 1, 16, 6)) },
       bass: s.bass && typeof s.bass === "object" ? s.bass : {},
       voices: Object.fromEntries(Object.entries(s.voices && typeof s.voices === "object" ? s.voices : {}).filter(([id]) => [...BUILTIN, "bass"].includes(id) || isSample(id)).slice(0, 80).map(([id, v]) => [id, cleanVoice(id, v)])),
@@ -744,7 +747,7 @@ export class Garden {
     const s = this._cleanSetup(raw);
     this._now = now;
     this.layers = []; this.future = []; this.routes = {};
-    this.bpm = s.bpm; this.active = Math.min(s.active, s.plants.length); this.midiRef = s.midi;
+    this.bpm = s.bpm; this.active = Math.min(s.active, s.plants.length); this.midiRef = s.midi; this.midiMap = s.midiMap;
     this.key = { root: s.root, scale: s.scale };
     this.notes = scaleOfLength(s.root, s.scale, this.D.scale_length || 24);
     this.simOpts = s.sim;

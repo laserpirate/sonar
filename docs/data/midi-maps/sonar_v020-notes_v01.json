@@ -1,0 +1,16 @@
+{
+ "format": "sonar midi map",
+ "v": 1,
+ "id": "v020-notes",
+ "source": "the v0.2.0 note map, AV-STANDARD v02 section 4",
+ "bindings": [
+  { "act": "play", "type": "note", "ch": -1, "num": 36, "mode": "trig" },
+  { "act": "nextGen", "type": "note", "ch": -1, "num": 37, "mode": "trig" },
+  { "act": "reseed", "type": "note", "ch": -1, "num": 38, "mode": "trig" },
+  { "act": "blackout", "type": "note", "ch": -1, "num": 41, "mode": "toggle" },
+  { "act": "panic", "type": "note", "ch": -1, "num": 42, "mode": "toggle" },
+  { "act": "bpm", "type": "cc", "ch": -1, "num": 1, "mode": "abs" },
+  { "act": "angle", "type": "cc", "ch": -1, "num": 4, "mode": "abs" },
+  { "act": "r-master", "type": "cc", "ch": -1, "num": 7, "mode": "abs" }
+ ]
+}

@@ -18,8 +18,6 @@ export async function enable({ S, on, act }) {
   const A = { ctx, chain: C, saw: C.saw, rain: C.rain, master: C.master, get engine() { return G.engineMode; }, set engine(v) { G.setEngineMode(v); }, get played() { return C.played; } };
   S.audio = A;
 
-  const setMaster = (v) => { S.master = Math.max(0, Math.min(1, v)); C.setMaster(S.master); const r = document.getElementById("r-master"); if (r) r.value = S.master; };
-  const getMaster = () => S.master;
   const muted = () => S.blackoutOn || S.panic || S.kill; // kill: a latching silence; the garden keeps drawing
   window.sonarBlackout.hook((v) => { C.setMute(v || S.panic || S.kill); if (v) C.allOff(); });
   C.setVoices(G.voiceParams); C.setMix(G.mix); C.setFx(G.fx);
@@ -38,7 +36,8 @@ export async function enable({ S, on, act }) {
   on("note", (n) => {
     if (muted() || n.silent) return;
     if (S.source.startsWith("live") && !liveAudio) return;
-    C.playNote(n, S.bpm, ctx.currentTime + 0.02);
+    const r = C.playNote(n, S.bpm, ctx.currentTime + 0.02);
+    if (S.midi?.noteOut) S.midi.noteOut(n, r.voice, r.len || 0.25);
   });
 
   // enable blip: one short note on the root, so a working output is audible at once
@@ -70,6 +69,6 @@ export async function enable({ S, on, act }) {
 
   document.getElementById("b-engine").textContent = G.engineMode;
 
-  await initMidi({ S, act, setMaster, getMaster });
+  await initMidi({ S, act, mapper: act.midiMapper() });
   return A;
 }

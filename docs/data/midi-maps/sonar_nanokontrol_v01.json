@@ -1,0 +1,21 @@
+{
+ "format": "sonar midi map",
+ "v": 1,
+ "id": "nanokontrol",
+ "source": "Korg nanoKONTROL (original), scene 1 factory CCs as remembered, not read from the device",
+ "verify": "verify with the wizard: not checked on a real nanoKONTROL",
+ "layout": "strip 1: fader morph, knob flourish, upper button next setup, lower button blackout; strip 6: fader master; transport: play, stop, rewind and fast forward step setups, loop adds a loop, REC held 1 s is panic",
+ "bindings": [
+  { "act": "s-morph", "type": "cc", "ch": -1, "num": 2, "mode": "abs" },
+  { "act": "r-flourish", "type": "cc", "ch": -1, "num": 14, "mode": "abs" },
+  { "act": "b-setup-next", "type": "cc", "ch": -1, "num": 23, "mode": "trig" },
+  { "act": "blackout", "type": "cc", "ch": -1, "num": 33, "mode": "trig" },
+  { "act": "r-master", "type": "cc", "ch": -1, "num": 9, "mode": "abs" },
+  { "act": "play", "type": "cc", "ch": -1, "num": 45, "mode": "trig" },
+  { "act": "stop", "type": "cc", "ch": -1, "num": 46, "mode": "trig" },
+  { "act": "b-setup-prev", "type": "cc", "ch": -1, "num": 47, "mode": "trig" },
+  { "act": "b-setup-next", "type": "cc", "ch": -1, "num": 48, "mode": "trig" },
+  { "act": "addLayer", "type": "cc", "ch": -1, "num": 49, "mode": "trig" },
+  { "act": "panic", "type": "cc", "ch": -1, "num": 44, "mode": "hold", "hold_ms": 1000 }
+ ]
+}
