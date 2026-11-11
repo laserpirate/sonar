@@ -11,6 +11,9 @@
 
 import { Plant, Sequencer, makeRandom, mtof, ftom, checkPlantPosition } from "./lsys.js";
 import { growRoots, ROOT_DEFAULT, BASS_DEFAULT, BASS_SYNCS, bassStep, ARCHETYPES } from "./roots.js";
+import { BUILTIN, voiceDefaults, cleanVoice, voiceLen, isSample } from "./voices.js";
+export const PITCH_MODES = ["flora", "walk"];
+const FX_DEFAULT = () => ({ reverb: { amount: 0, size: 2.5 }, wind: { level: 0, tone: 700 } });
 
 const num = (v, lo, hi, d) => { const n = Number(v); return v !== null && v !== undefined && v !== "" && Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : d; };
 export const LOOP_BARS = 4;
@@ -141,6 +144,12 @@ export class Garden {
     this.bassWalk = 0; this.bassCount = 0; this.nextBassT = null;
     this.sounding = [];        // conductor: beat at which each admitted note ends
     this._cBar = null; this._roles = new Map(); this._slots = new Map(); this._placed = new Set();
+    this.voiceParams = Object.fromEntries([...BUILTIN, "bass"].map((id) => [id, voiceDefaults(id)]));
+    this.mix = {};             // voice id -> {solo, mute}
+    this.fx = FX_DEFAULT();
+    this.plantOpts = {};       // plant id -> {mode, wildness, density}
+    this.samples = [];         // [{id, name}]: the sounds a setup refers to
+    this.bankName = null; this.randomSeed = null;
     this.layers = [];
     this.active = 1;
     this.playing = true;
@@ -154,6 +163,7 @@ export class Garden {
   seed(seed, instr) {
     this.seedValue = seed >>> 0 || 1;
     this.random = makeRandom(this.seedValue);
+    this._dens = {}; this._walk = {};
     const p1 = instr?.[0] || presetOfSeed(this.seedValue, this.N);
     const p2 = instr?.[1] || presetOfSeed(Math.floor(this.seedValue / 7) + 3, this.N);
     this.instr = [p1, p2];
@@ -205,6 +215,21 @@ export class Garden {
     f.leads = Math.round(num(o.leads, 1, 4, f.leads)); f.density = num(o.density, 0, 1, f.density); f.budget = Math.round(num(o.budget, 1, 16, f.budget));
     if (o.n !== undefined && Math.round(o.n) !== this.plants.length) this._growForest(o.n);
   }
+  setVoiceParam(id, k, v) { const cur = this.voiceParams[id] || voiceDefaults(id); this.voiceParams[id] = cleanVoice(id, { ...cur, [k]: v }); }
+  setMixVoice(id, o) { const m = { ...(this.mix[id] || {}), ...o }; this.mix[id] = { solo: !!m.solo, mute: !!m.mute }; }
+  setFx(o) {
+    const f = this.fx;
+    if (o.reverb) f.reverb = { amount: num(o.reverb.amount, 0, 1, f.reverb.amount), size: num(o.reverb.size, 0.3, 8, f.reverb.size) };
+    if (o.wind) f.wind = { level: num(o.wind.level, 0, 1, f.wind.level), tone: num(o.wind.tone, 100, 4000, f.wind.tone) };
+  }
+  // per plant: pitch mode, wildness (seeded jitter on the drawn branch angle) and density (chance a note sounds)
+  setPlantOpt(id, o) {
+    const cur = this.plantOpts[id] || { mode: "flora", wildness: 0, density: 1 };
+    this.plantOpts[id] = { mode: PITCH_MODES.includes(o.mode) ? o.mode : cur.mode, wildness: num(o.wildness, 0, 0.6, cur.wildness), density: num(o.density, 0, 1, cur.density) };
+    delete this._walk[id];
+  }
+  addSampleRef(id, name) { if (!isSample(id)) return; this.samples = this.samples.filter((x) => x.id !== id).concat([{ id, name: String(name).slice(0, 80) }]); if (!this.voiceParams[id]) this.voiceParams[id] = voiceDefaults(id); }
+  removeSampleRef(id) { this.samples = this.samples.filter((x) => x.id !== id); delete this.voiceParams[id]; }
   setRoots(id, o) {
     const R = { ...(this.roots[id] || ROOT_DEFAULT()), ...o };
     R.archetype = ARCHETYPES.includes(R.archetype) ? R.archetype : null;
@@ -277,7 +302,7 @@ export class Garden {
     A.rotation = Math.max(0, Math.min(15, Math.round(A.rotation)));
     A.nextT = null;
   }
-  setDelay(engine, o) { Object.assign(this.delays[engine], o); }
+  setDelay(engine, o) { Object.assign((this.delays[engine] ||= DELAY_DEFAULT()), o); }
   setAllDelays(amount) { for (const d of Object.values(this.delays)) d.amount = amount; }
   setEngineMode(m) { if (["saw", "rain", "both"].includes(m)) this.engineMode = m; }
   setRoute(id, voice) { if (voice) this.routes[id] = voice; else delete this.routes[id]; }
@@ -406,6 +431,11 @@ export class Garden {
   }
   _emit(ev) {
     ev.engine = this.engineOf(ev.plant, !!ev.layer);
+    const po = ev.layer ? null : this.plantOpts[ev.plant];
+    if (po) {
+      if (po.mode === "walk") this._walkNote(ev);
+      if (po.density < 1 && (this._dens[ev.plant] ||= makeRandom(hashSeed(this.seedValue, ev.plant + 700) || 1))() > po.density) ev.silent = true;
+    }
     // pitch (semitones) applied to everything the garden plays
     if (this.pitch) { ev.note += this.pitch; ev.freq *= 2 ** (this.pitch / 12); }
     // feed the arpeggiator of this plant's engine with distinct scale indices, newest last
@@ -450,6 +480,7 @@ export class Garden {
   _conductNote(ev) {
     if (ev.engine === "rain") ev.maxLen = 3;   // a rain note's length must be known to count it
     ev.voiceKey = ev.plant * 128 + ev.note;    // its own voice, so no plant steals another's
+    if (ev.silent) return;                     // already quiet (density): nothing to count
     if (ev.layer) { if (!this._admit(ev)) ev.silent = true; return; }
     const bar = Math.floor(ev.t / 4);
     if (bar !== this._cBar) this._conduct(bar);
@@ -470,7 +501,33 @@ export class Garden {
       return 1.5 * Math.max(0.12, Math.min(1, (ev.dur * spb) / 1.2)) * (ev.gate ?? 1) + 0.05;
     }
     if (ev.engine === "rain") return (ev.maxLen ?? 8) * 1.2 + 0.06;
+    if (ev.engine && ev.engine !== "saw") return voiceLen(ev.engine, this.voiceParams[ev.engine] || voiceDefaults(ev.engine), ev, this.bpm);
     return 1.55;
+  }
+  // after phylla-arp (SymbiOS, Phylla biome), behaviour reimplemented: the walk pitch mode.
+  // + and - move the scale degree by a step that grows with the branch angle, [ opens an octave up
+  // and ] closes back, the first segment of a lateral adds a second.
+  _walkNote(ev) {
+    const k = ev.plant - 1, plant = this.plants[k];
+    if (!plant?.lsys || !(ev.idx > 0)) return;
+    const s = plant.sentence, N = this.notes.length;
+    let W = this._walk[ev.plant];
+    if (!W || ev.idx <= W.i || W.s !== s) W = this._walk[ev.plant] = { i: 0, s, d: Math.floor(N / 3), oct: 0, stack: [], lateral: false };
+    const step = 1 + Math.floor(Math.abs(plant.angle || 0) / 30);
+    let second = false;
+    for (let j = W.i + 1; j <= ev.idx; j++) {
+      const c = s[j - 1];
+      if (c === "+") W.d += step;
+      else if (c === "-") W.d -= step;
+      else if (c === "[") { W.stack.push([W.d, W.oct]); W.oct = Math.min(2, W.oct + 1); W.lateral = true; }
+      else if (c === "]") { const t = W.stack.pop(); if (t) [W.d, W.oct] = t; W.lateral = false; }
+      else if (c === "F" && j === ev.idx) { second = W.lateral; W.lateral = false; }
+      else if (c === "F") W.lateral = false;
+    }
+    W.i = ev.idx;
+    W.d = ((W.d % N) + N) % N;
+    const di = Math.min(N - 1, W.d + (second ? 1 : 0));
+    ev.note = this.notes[di] + 12 * W.oct; ev.freq = mtof(ev.note); ev.scaleIndex = di + 1;
   }
   _admit(ev) {
     if (!this.conducting) return true;
@@ -579,7 +636,7 @@ export class Garden {
     this._geom = this._geom || new Map();
     this._rev = this._rev || 0;
     const t = plant.turtle;
-    const key = `${plant.lsys.sentence}|${t.todo === plant.lsys.sentence}|${t.theta}|${t.length}|${plant.initialTurtleRotation}|${plant.startFrom.x},${plant.startFrom.y}`;
+    const key = `${plant.lsys.sentence}|${t.todo === plant.lsys.sentence}|${t.theta}|${t.length}|${plant.initialTurtleRotation}|${plant.startFrom.x},${plant.startFrom.y}|${this.plantOpts[id]?.wildness || 0}`;
     let c = this._geom.get(id);
     if (!c || c.key !== key) {
       const geom = this._still(plant, id);
@@ -610,7 +667,16 @@ export class Garden {
     const t = plant.turtle, theta = t.theta, rnd = t.random;
     t.random = makeRandom((this.seedValue ^ Math.imul(id, 0x9e3779b1)) >>> 0 || 1);
     t.stack = [];
-    const g = plant.render();
+    const w = this.plantOpts[id]?.wildness || 0;
+    if (w > 0) {
+      // wildness: each turn of the turtle off by up to w of itself, seeded; the drawing only
+      const jr = makeRandom(hashSeed(this.seedValue, id + 800) || 1), turtleRender = t.render;
+      t.render = function () {
+        this.rotate = function (th, reset) { return Object.getPrototypeOf(this).rotate.call(this, reset ? th : th * (1 + w * (2 * jr() - 1)), reset); };
+        try { return turtleRender.call(this); } finally { delete this.rotate; }
+      };
+      try { var g = plant.render(); } finally { delete t.render; }
+    } else var g = plant.render();
     t.theta = theta; t.random = rnd; t.stack = [];
     return g;
   }
@@ -622,12 +688,14 @@ export class Garden {
     return {
       v: SETUP_VERSION, seed: this.seedValue, rng: this.random.state(), bpm: this.bpm, active: this.active,
       key: { ...this.key }, pitch: this.pitch, growth: this.growth, engineMode: this.engineMode, layerRoute: this.layerRoute, flourish: this.flourish,
-      plants: this.plants.map((p, k) => ({ instr: this.instr[k], custom: this.instr[k] > CUSTOM0 ? { ...this.customs[this.instr[k] - CUSTOM0 - 1] } : undefined, gen: p.currentGeneration, lgen: p.lsys.generation, sentence: p.sentence, randomAngles: p.lsys.randomAngles.slice(), angle: p.angle, length: p.userScale ?? 1, engine: this.routes[k + 1] ?? null, roots: this.roots[k + 1]?.archetype ? { ...this.roots[k + 1] } : null, rng: k >= 2 ? this.prand[k].state() : undefined })),
+      plants: this.plants.map((p, k) => ({ instr: this.instr[k], custom: this.instr[k] > CUSTOM0 ? { ...this.customs[this.instr[k] - CUSTOM0 - 1] } : undefined, gen: p.currentGeneration, lgen: p.lsys.generation, sentence: p.sentence, randomAngles: p.lsys.randomAngles.slice(), angle: p.angle, length: p.userScale ?? 1, engine: this.routes[k + 1] ?? null, roots: this.roots[k + 1]?.archetype ? { ...this.roots[k + 1] } : null, rng: k >= 2 ? this.prand[k].state() : undefined, opts: this.plantOpts[k + 1] ? { ...this.plantOpts[k + 1] } : null })),
       forest: { leads: this.forest.leads, density: this.forest.density, budget: this.forest.budget }, bass: { ...this.bass },
+      voices: JSON.parse(JSON.stringify(this.voiceParams)), mix: JSON.parse(JSON.stringify(this.mix)), fx: JSON.parse(JSON.stringify(this.fx)),
+      samples: this.samples.map((x) => ({ ...x })), bank: this.bankName, randomSeed: this.randomSeed,
       layers: this.layers.map((L) => ({ seed: L.seed, serial: L.serial, phase: L.start % LOOP_BEATS, engine: this.routes[L.id] ?? null })),
       layerSerial: this._layerSerial || 0,
       arps: { saw: arp(this.arps.saw), rain: arp(this.arps.rain) },
-      delays: { saw: { ...this.delays.saw }, rain: { ...this.delays.rain } },
+      delays: Object.fromEntries(Object.entries(this.delays).map(([k, d]) => [k, { ...d }])),
       sim: { ...this.simOpts }, midi: this.midiRef ?? null,
     };
   }
@@ -640,8 +708,9 @@ export class Garden {
       if (p?.custom) { const v = validatePlant(p.custom); if (!v.ok) throw new Error("setup has a plant outside flora's alphabet"); custom = v.def; instr = CUSTOM0 + 1; }
       else if (!(instr >= 1 && instr <= this.N)) throw new Error("setup names an unknown plant");
       const R = p?.roots && ARCHETYPES.includes(p.roots.archetype) ? { archetype: p.roots.archetype, depth: num(p.roots.depth, 0, 1, 0.6), spread: num(p.roots.spread, 0, 1, 0.5), density: num(p.roots.density, 0, 1, 0.5) } : null;
+      const O = p?.opts && typeof p.opts === "object" ? { mode: PITCH_MODES.includes(p.opts.mode) ? p.opts.mode : "flora", wildness: num(p.opts.wildness, 0, 0.6, 0), density: num(p.opts.density, 0, 1, 1) } : null;
       return {
-        custom, roots: R, rng: num(p?.rng, 0, 4294967295, undefined),
+        custom, roots: R, opts: O, rng: num(p?.rng, 0, 4294967295, undefined),
         instr, gen: num(p.gen, 0, 64, undefined), lgen: num(p.lgen, -64, 64, undefined),
         sentence: typeof p.sentence === "string" && p.sentence.length <= 20000 ? p.sentence : undefined,
         randomAngles: Array.isArray(p.randomAngles) ? p.randomAngles.slice(0, 4000).map((x) => num(x, -360, 360, 0)) : [],
@@ -657,10 +726,17 @@ export class Garden {
       root: Math.round(num(s.key?.root, 0, 127, this.D.root_note)), scale: SCALES[s.key?.scale] ? s.key.scale : this.D.scale_name || "dorian",
       pitch: num(s.pitch, -24, 24, 0), growth: num(s.growth, 0, 16, 0), engineMode: ["saw", "rain", "both"].includes(s.engineMode) ? s.engineMode : "saw",
       layerRoute: voiceId(s.layerRoute), flourish: num(s.flourish, 0, 1, 0), plants, layers, layerSerial: num(s.layerSerial, 0, 1e6, undefined),
-      arps: { saw: s.arps?.saw || {}, rain: s.arps?.rain || {} }, delays: { saw: delay(s.delays?.saw), rain: delay(s.delays?.rain) }, sim,
+      arps: { saw: s.arps?.saw || {}, rain: s.arps?.rain || {} }, sim,
+      delays: Object.fromEntries([["saw", delay(s.delays?.saw)], ["rain", delay(s.delays?.rain)], ...Object.entries(s.delays && typeof s.delays === "object" ? s.delays : {}).filter(([k]) => k !== "saw" && k !== "rain" && ([...BUILTIN, "bass"].includes(k) || isSample(k))).slice(0, 80).map(([k, d]) => [k, delay(d)])]),
       midi: typeof s.midi === "string" ? s.midi.slice(0, 80) : null,
       forest: { leads: Math.round(num(s.forest?.leads, 1, 4, 2)), density: num(s.forest?.density, 0, 1, 0.6), budget: Math.round(num(s.forest?.budget, 1, 16, 6)) },
       bass: s.bass && typeof s.bass === "object" ? s.bass : {},
+      voices: Object.fromEntries(Object.entries(s.voices && typeof s.voices === "object" ? s.voices : {}).filter(([id]) => [...BUILTIN, "bass"].includes(id) || isSample(id)).slice(0, 80).map(([id, v]) => [id, cleanVoice(id, v)])),
+      mix: Object.fromEntries(Object.entries(s.mix && typeof s.mix === "object" ? s.mix : {}).filter(([id]) => [...BUILTIN, "bass"].includes(id) || isSample(id)).slice(0, 80).map(([id, v]) => [id, { solo: !!v?.solo, mute: !!v?.mute }])),
+      fx: { reverb: { amount: num(s.fx?.reverb?.amount, 0, 1, 0), size: num(s.fx?.reverb?.size, 0.3, 8, 2.5) }, wind: { level: num(s.fx?.wind?.level, 0, 1, 0), tone: num(s.fx?.wind?.tone, 100, 4000, 700) } },
+      samples: (Array.isArray(s.samples) ? s.samples : []).filter((x) => isSample(x?.id)).slice(0, 64).map((x) => ({ id: x.id, name: String(x.name ?? x.id).slice(0, 80) })),
+      bank: typeof s.bank === "string" ? s.bank.slice(0, 40) : null,
+      randomSeed: num(s.randomSeed, 0, 4294967295, null),
     };
   }
   // load a setup from beat `now`; loop layers keep their place on the 4 bar grid
@@ -678,6 +754,11 @@ export class Garden {
     Object.assign(this.forest, s.forest, { n: s.plants.length });
     this.bass = BASS_DEFAULT(); this.setBass(s.bass);
     this.bassWalk = 0; this.bassCount = 0; this.nextBassT = null; this.sounding = []; this._cBar = null;
+    this.voiceParams = Object.fromEntries([...BUILTIN, "bass"].map((id) => [id, voiceDefaults(id)]));
+    Object.assign(this.voiceParams, s.voices);
+    this.mix = s.mix; this.fx = s.fx; this.samples = s.samples; this.bankName = s.bank; this.randomSeed = s.randomSeed;
+    for (const x of this.samples) if (!this.voiceParams[x.id]) this.voiceParams[x.id] = voiceDefaults(x.id);
+    this.plantOpts = {};
     this.seed(s.seed, instrs);
     s.plants.forEach((p, k) => {
       const plant = this.plants[k];
@@ -691,6 +772,7 @@ export class Garden {
       plant.userScale = p.length;
       if (p.engine) this.routes[k + 1] = p.engine;
       if (p.roots) this.roots[k + 1] = { ...p.roots };
+      if (p.opts) this.plantOpts[k + 1] = { ...p.opts };
       if (k >= 2 && p.rng !== undefined) this.prand[k].restore(p.rng);
       this.seqs[k] = this._seq(plant, this._rnd(k), now);
       this.pending[k] = null;
@@ -705,6 +787,8 @@ export class Garden {
       A.buf = []; A.ix = 0; A.pos = 0; A.nextT = null; A.random = makeRandom(ARP_SEEDS[e]);
       Object.assign(this.delays[e], s.delays[e]);
     }
+    for (const k of Object.keys(this.delays)) if (!ARP_ENGINES.includes(k)) delete this.delays[k];
+    for (const [k, d] of Object.entries(s.delays)) if (!ARP_ENGINES.includes(k)) this.delays[k] = { ...d };
     for (const l of s.layers) {
       this._layerSerial = l.serial - 1;
       const L = this.addLayer(l.seed, now);

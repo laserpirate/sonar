@@ -66,7 +66,7 @@ export function slider(panel, o) {
   row.append(l, v, r); panel.appendChild(row);
   refreshers.push(() => { if (document.activeElement !== r) { const x = String(o.get()); if (r.value !== x) r.value = x; } show(); });
   show();
-  controls.set(o.id, { id: o.id, label: o.label2 || o.label, kind: "range", lo: Number(o.min), hi: Number(o.max), step: Number(o.step ?? 1), get: o.get, set: (x) => { o.set(x); }, panel: panel.id, random: o.random !== false });
+  controls.set(o.id, { id: o.id, label: o.label2 || o.label, kind: "range", lo: Number(o.min), hi: Number(o.max), step: Number(o.step ?? 1), rlo: o.rlo, rhi: o.rhi, get: o.get, set: (x) => { o.set(x); }, panel: panel.id, random: o.random !== false });
   return r;
 }
 
@@ -108,3 +108,19 @@ export function note(panel, text, id) {
   const p = document.createElement("div"); p.className = "note"; p.textContent = text; if (id) p.id = id; panel.appendChild(p); return p;
 }
 export const onRefresh = (f) => refreshers.push(f);
+
+// every control marked random gets a value from `rand` (0..1), inside its rlo..rhi, else the middle
+// 60 percent of its range; selects pick an option. Same seed, same values: the order is the registry's.
+export function randomize(rand) {
+  for (const c of controls.values()) {
+    if (c.random === false) continue;
+    if (c.kind === "range") {
+      const lo = c.rlo ?? c.lo + 0.2 * (c.hi - c.lo), hi = c.rhi ?? c.hi - 0.2 * (c.hi - c.lo);
+      const st = c.step || 1, x = lo + rand() * (hi - lo);
+      c.set(Math.max(c.lo, Math.min(c.hi, Math.round(x / st) * st)));
+    } else if (c.kind === "select" && c.options?.length) {
+      c.set(c.options[Math.floor(rand() * c.options.length)]);
+    }
+  }
+  refreshAll();
+}

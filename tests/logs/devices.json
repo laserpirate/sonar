@@ -46,14 +46,14 @@
   },
   "minFont": 18,
   "small": [
-   "tab-tempo 76x36",
-   "tab-arp 54x36",
-   "tab-delay 69x36",
-   "tab-plants 73x36",
-   "tab-more 68x36",
-   "r-bpm 315x28",
-   "r-pitch 315x28",
-   "s-root 70x36"
+   "tab-tempo 69x36",
+   "tab-arp 46x36",
+   "tab-delay 61x36",
+   "tab-plants 65x36",
+   "tab-roots 58x36",
+   "tab-forest 63x36",
+   "tab-setups 69x36",
+   "tab-more 60x36"
   ]
  }
 }

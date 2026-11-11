@@ -1,0 +1,56 @@
+{
+ "browser": "installed Chrome",
+ "rows": [
+  {
+   "case": "saw",
+   "v020": -28.64,
+   "now": -28.74,
+   "diff": -0.1,
+   "events": [
+    52,
+    52
+   ]
+  },
+  {
+   "case": "saw delay 0.4",
+   "v020": -27.79,
+   "now": -27.89,
+   "diff": -0.1,
+   "events": [
+    52,
+    52
+   ]
+  },
+  {
+   "case": "rain",
+   "v020": -8.23,
+   "now": -8.32,
+   "diff": -0.1,
+   "events": [
+    52,
+    52
+   ]
+  },
+  {
+   "case": "rain delay 0.4",
+   "v020": -7.92,
+   "now": -8.02,
+   "diff": -0.1,
+   "events": [
+    52,
+    52
+   ]
+  },
+  {
+   "case": "saw seed 7 at 120",
+   "v020": -18.05,
+   "now": -18.15,
+   "diff": -0.1,
+   "events": [
+    120,
+    120
+   ]
+  }
+ ],
+ "ok": true
+}

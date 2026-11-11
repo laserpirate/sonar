@@ -96,7 +96,23 @@ fo.setup(3, fo.addCustom({ axiom: "X", rules: [["X", "F[+X][-X]FX"], ["F", "FF"]
 const fs = JSON.parse(JSON.stringify(fo.toSetup()));
 const fr = new Garden({ catalog, seed: 1 }).fromSetup(fs, 0);
 out.forestSetup = { dataEqual: JSON.stringify(fr.toSetup()) === JSON.stringify(fs), logsEqual: fsig(play(fo, 128)) === fsig(play(fr, 128)), n: fr.plants.length };
+// 20 Tier 5 plant options: walk is deterministic and differs from flora; density near its value; wildness moves the drawing only
+const nsig = (evs) => evs.filter((e) => e.plant === 1 && !e.arp).map((e) => `${e.note}:${e.silent ? 0 : 1}@${e.t.toFixed(4)}`).join(" ");
+const opt = (o) => { const g = new Garden({ catalog, seed: 42 }); if (o) g.setPlantOpt(1, o); return g; };
+const flora = play(opt(), 128), walk1 = play(opt({ mode: "walk" }), 128), walk2 = play(opt({ mode: "walk" }), 128);
+const dens = play(opt({ density: 0.5 }), 256).filter((e) => e.plant === 1 && !e.arp);
+const geo = (g) => JSON.stringify(g.geometry()[0].geom);
+const gw0 = opt(), gw1 = opt({ wildness: 0.4 });
+out.plantOpts = { walkSame: nsig(walk1) === nsig(walk2), walkDiffers: nsig(walk1) !== nsig(flora), walkTimes: walk1.filter((e) => e.plant === 1 && !e.arp).map((e) => e.t.toFixed(4)).join() === flora.filter((e) => e.plant === 1 && !e.arp).map((e) => e.t.toFixed(4)).join(),
+  densityShare: +(dens.filter((e) => !e.silent).length / dens.length).toFixed(2), wildGeomDiffers: geo(gw0) !== geo(gw1), wildNotesSame: nsig(play(opt({ wildness: 0.4 }), 128)) === nsig(flora) };
+// 21 setup round trip with voices, space and plant options
+const vo = new Garden({ catalog, seed: 33 }); vo.setVoiceParam("pluck", "decay", 3.1); vo.setVoiceParam("saw", "octave", 1); vo.setFx({ reverb: { amount: 0.5, size: 3 }, wind: { level: 0.2, tone: 700 } });
+vo.setMixVoice("rain", { mute: true }); vo.setPlantOpt(2, { mode: "walk", wildness: 0.3, density: 0.7 }); vo.setRoute(1, "pluck");
+const vs = JSON.parse(JSON.stringify(vo.toSetup()));
+const vr = new Garden({ catalog, seed: 2 }).fromSetup(vs, 0);
+out.voiceSetup = { dataEqual: JSON.stringify(vr.toSetup()) === JSON.stringify(vs), logsEqual: fsig(play(vo, 128)) === fsig(play(vr, 128)), decay: vr.voiceParams.pluck?.decay, walk: vr.plantOpts[2]?.mode };
 console.log(JSON.stringify(out, null, 1));
-const ok = out.forest.same && out.forest.maxVoices <= 6 && out.forest.leadsPerBarMax <= 2 && out.forest.chorusOnce && out.forest.lit === 16 && out.forest.bass > 5 && out.twoPlantsClean &&
+const ok = out.plantOpts.walkSame && out.plantOpts.walkDiffers && out.plantOpts.walkTimes && Math.abs(out.plantOpts.densityShare - 0.5) < 0.12 && out.plantOpts.wildGeomDiffers && out.plantOpts.wildNotesSame &&
+  out.voiceSetup.dataEqual && out.voiceSetup.logsEqual && out.voiceSetup.decay === 3.1 && out.voiceSetup.walk === "walk" &&out.forest.same && out.forest.maxVoices <= 6 && out.forest.leadsPerBarMax <= 2 && out.forest.chorusOnce && out.forest.lit === 16 && out.forest.bass > 5 && out.twoPlantsClean &&
   Object.values(out.roots).every((r) => r.tips > 2 && r.same && r.below) && out.forestSetup.dataEqual && out.forestSetup.logsEqual && out.forestSetup.n === 7 && out.setup.dataEqual && out.setup.logsEqual && out.setup.notes > 50 && out.setup.sentencesKept && out.setup.lateEqual && out.setupRefused && out.factory.length === 12 && out.factory.every((n) => n > 5) && out.plantsHeld && out.twoArps.saw > 10 && out.twoArps.rain > 10 && out.twoArps.plant1Saw && out.twoArps.plant2Rain && Math.abs(out.euclid.perBar16 - 5) < 0.51 && out.flourish.n > 0 && out.flourish.same && out.flourish.otherEngine && out.defaultsClean && out.determinism && out.layer.loopIdentical && out.layer.start === 4 && out.maxLayers === 4 && out.cleared && out.arp.notes > 20 && out.key.sameTimes && out.key.differentNotes && out.pitch;
 console.log(ok ? "OK" : "FAIL"); process.exit(ok ? 0 : 1);

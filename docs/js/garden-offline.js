@@ -24,7 +24,19 @@ export async function renderGarden(catalog, opts = {}) {
   if (opts.forest) G.setForest(opts.forest);
   if (opts.roots) for (const [id, o] of Object.entries(opts.roots)) G.setRoots(Number(id), o);
   if (opts.bass) G.setBass(opts.bass);
-  C.setBass(G.bass);
+  if (opts.voices) for (const [id, o] of Object.entries(opts.voices)) for (const [k, v] of Object.entries(o)) G.setVoiceParam(id, k, v);
+  if (opts.fx) G.setFx(opts.fx);
+  if (opts.mix) for (const [id, o] of Object.entries(opts.mix)) G.setMixVoice(id, o);
+  if (opts.plantOpts) for (const [id, o] of Object.entries(opts.plantOpts)) G.setPlantOpt(Number(id), o);
+  // samples: [{id, sr, channels: [Float32Array]}]
+  for (const x of opts.samples || []) {
+    const b = ctx.createBuffer(x.channels.length, x.channels[0].length, x.sr);
+    x.channels.forEach((d, c) => b.copyToChannel(d, c));
+    C.setSample(x.id, b); G.addSampleRef(x.id, x.name || x.id);
+  }
+  if (!opts.setup) for (const [id, o] of Object.entries(delays)) G.setDelay(id, o);
+  if (opts.voiceDelays) for (const [id, o] of Object.entries(opts.voiceDelays)) G.setDelay(id, o);
+  C.setBass(G.bass); C.setVoices(G.voiceParams); C.setMix(G.mix); C.setFx(G.fx); C.setDelays(G.delays);
   let droneAt = -1;
   if (opts.pitch) G.setPitch(opts.pitch);
   if (opts.growth) G.setGrowth(opts.growth);

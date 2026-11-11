@@ -1,12 +1,15 @@
 // player.js · one audio chain for the page (audio.js) and the offline renders (garden-offline.js).
 //
-//   voice bus -> mix -> master -> mute -> limiter -> soft clip -> out
-//   voice bus -> its own delay send -> wet -> mix
+//   voice bus -> level (solo, mute) -> tremolo -> mix -> master -> mute -> limiter -> soft clip -> out
+//                                     tremolo -> its own delay send -> wet -> mix
+//                                     tremolo -> shared reverb send -> convolver -> mix
+//   wind bed and drone -> mix
 //
 // Every voice implements {id, noteOn(ev, when), allOff(), params, set(), connect(send)}.
 // playNote() routes a garden event to the voice named in ev.engine.
 import { SawEngine } from "./engine-saw.js";
 import { RainEngine } from "./engine-rain.js";
+import { PluckVoice, SineVoice, WaterVoice, SamplerVoice, makeImpulse, makePink, isSample } from "./voices.js";
 
 export const ENGINES = ["saw", "rain", "both"];
 export const DELAY_DIVS = { "1/16": 0.25, "1/8": 0.5, "d1/8": 0.75, "1/4": 1, "1/2": 2 };
@@ -169,21 +172,80 @@ export function createChain(ctx, opts = {}) {
   limiter.connect(clip).connect(opts.destination || ctx.destination);
 
   const bpm = opts.bpm || 90;
-  const C = { ctx, mix, master, mute, limiter, clip, delays: {}, voices: {}, played: 0, bpm, rand: opts.rand || Math.random, spans: [], countSpans: !!opts.countSpans };
+  const C = { ctx, mix, master, mute, limiter, clip, delays: {}, voices: {}, played: 0, playedBy: {}, bpm, rand: opts.rand || Math.random, spans: [], countSpans: !!opts.countSpans };
+  // the shared reverb: one send level for every voice, a generated room
+  const revIn = ctx.createGain(); revIn.gain.value = 0;
+  const conv = ctx.createConvolver();
+  let revSize = 0;
+  revIn.connect(conv).connect(mix);
+  C.slots = {};
   C.addVoice = (name, make) => {
-    const bus = ctx.createGain();
-    bus.connect(mix);
+    const bus = ctx.createGain(), lvl = ctx.createGain(), trem = ctx.createGain();
+    bus.connect(lvl).connect(trem).connect(mix);
     const v = make(bus);
     C.voices[name] = v;
     const d = createDelay(ctx, C.bpm, (opts.delays || {})[name]);
     C.delays[name] = d;
-    v.connect(d.send);
+    trem.connect(d.send);
     d.wet.connect(mix);
+    trem.connect(revIn);
+    C.slots[name] = { lvl, trem, lfo: null, depth: null, octave: 0, detune: 0, level: 1, audible: true };
     return v;
   };
+  const slotLevel = (sl) => sl.lvl.gain.setTargetAtTime(sl.audible ? sl.level : 0, ctx.currentTime, 0.02);
   C.addVoice("saw", (bus) => new SawVoice(ctx, bus, { random: opts.random, bpm }));
   C.addVoice("rain", (bus) => new RainVoice(ctx, bus, { rand: C.rand, rainParams: opts.rainParams, bpm }));
   C.addVoice("bass", (bus) => new BassVoice(ctx, bus, { bpm }));
+  C.addVoice("pluck", (bus) => new PluckVoice(ctx, bus));
+  C.addVoice("sine", (bus) => new SineVoice(ctx, bus));
+  C.addVoice("water", (bus) => new WaterVoice(ctx, bus));
+  // a loaded sound becomes voice smp<n>; a later buffer for the same id replaces it
+  C.setSample = (id, buffer) => {
+    if (!isSample(id)) return;
+    if (C.voices[id]) C.voices[id].setBuffer(buffer);
+    else C.addVoice(id, (bus) => new SamplerVoice(ctx, bus, id, buffer));
+  };
+  // params for every voice: the slot's level, octave, detune, tremolo, and the voice's own
+  C.setVoices = (all) => {
+    for (const [id, p] of Object.entries(all || {})) {
+      const v = C.voices[id], sl = C.slots[id];
+      if (!v || !sl) continue;
+      for (const [k, x] of Object.entries(p)) if (v.p && k in v.p) v.set(k, x);
+      sl.octave = p.octave || 0; sl.detune = p.detune || 0;
+      if (p.level !== undefined && p.level !== sl.level) { sl.level = p.level; slotLevel(sl); }
+      const depth = p.tremolo || 0, rate = p.tremrate || 4.5;
+      if (depth > 0 && !sl.lfo) { sl.lfo = ctx.createOscillator(); sl.depth = ctx.createGain(); sl.depth.gain.value = 0; sl.lfo.connect(sl.depth).connect(sl.trem.gain); sl.lfo.start(); }
+      if (sl.lfo) {
+        sl.lfo.frequency.setTargetAtTime(rate, ctx.currentTime, 0.05);
+        sl.depth.gain.setTargetAtTime(depth / 2, ctx.currentTime, 0.05);
+        sl.trem.gain.setTargetAtTime(1 - depth / 2, ctx.currentTime, 0.05);
+      }
+    }
+  };
+  // solo and mute: with any voice soloed, only soloed voices sound
+  C.setMix = (mixState) => {
+    const m = mixState || {}, anySolo = Object.values(m).some((x) => x?.solo);
+    for (const [id, sl] of Object.entries(C.slots)) {
+      const a = !m[id]?.mute && (!anySolo || !!m[id]?.solo);
+      if (a !== sl.audible) { sl.audible = a; slotLevel(sl); }
+    }
+  };
+  // reverb {amount, size} and wind {level, tone}
+  let wind = null;
+  C.setFx = (fx) => {
+    const t = ctx.currentTime, r = fx?.reverb || {}, w = fx?.wind || {};
+    const size = Math.max(0.3, Math.min(8, r.size ?? 2.5));
+    if ((r.amount || 0) > 0 && Math.abs(size - revSize) > 0.05) { revSize = size; conv.buffer = makeImpulse(ctx, size); }
+    revIn.gain.setTargetAtTime(Math.max(0, Math.min(1, r.amount || 0)) * 0.5, t, 0.05);
+    if ((w.level || 0) > 0 && !wind) {
+      const src = ctx.createBufferSource(); src.buffer = makePink(ctx); src.loop = true;
+      const lp = ctx.createBiquadFilter(); lp.type = "lowpass";
+      const g = ctx.createGain(); g.gain.value = 0;
+      src.connect(lp).connect(g).connect(mix); src.start();
+      wind = { lp, g };
+    }
+    if (wind) { wind.lp.frequency.setTargetAtTime(Math.max(100, Math.min(4000, w.tone ?? 700)), t, 0.1); wind.g.gain.setTargetAtTime(Math.max(0, Math.min(1, w.level || 0)) * 0.35, t, 0.2); }
+  };
   C.saw = C.voices.saw.engine; C.rain = C.voices.rain.engine;
   C.setBass = (b) => { for (const k of ["level", "decay", "release", "detune"]) if (b[k] !== undefined) C.voices.bass.set(k, b[k]); };
   // the drone: two sines a hair apart on the scale root, shared by every plant with roots
@@ -210,17 +272,21 @@ export function createChain(ctx, opts = {}) {
     setBpm(b) { C.setBpm(b); },
   };
   C.setBpm = (b) => { C.bpm = b; for (const d of Object.values(C.delays)) d.setBpm(b); for (const v of Object.values(C.voices)) v.bpm = b; };
+  // the v0.2.0 note path is untouched when octave and detune are 0
   C.setDelays = (o) => { for (const k of Object.keys(o)) C.delays[k]?.set(o[k]); };
   C.setMaster = (v) => master.gain.setTargetAtTime(Math.max(0, Math.min(1, v)), ctx.currentTime, 0.02);
   C.setMute = (m) => mute.gain.setTargetAtTime(m ? 0 : 1, ctx.currentTime, 0.01);
   C.allOff = () => { for (const v of Object.values(C.voices)) v.allOff(); };
   // ev: a garden event {plant, note, freq, dur, engine, arp?, layer?}; when: ctx time
   C.playNote = (ev, bpm2, when) => {
-    if (bpm2 && bpm2 !== C.bpm) { C.bpm = bpm2; for (const v of Object.values(C.voices)) v.bpm = bpm2; }
+    if (bpm2 && bpm2 !== C.bpm) { C.bpm = bpm2; for (const x of Object.values(C.voices)) x.bpm = bpm2; }
     const v = C.voices[ev.engine] || C.voices.saw;
+    const sl = C.slots[v.id];
+    if (sl && (sl.octave || sl.detune)) ev = { ...ev, freq: ev.freq * 2 ** (sl.octave + sl.detune / 1200) };
     const len = v.noteOn(ev, when);
     if (C.countSpans) C.spans.push([when, when + (len || 0), v.id]);
     C.played++;
+    C.playedBy[v.id] = (C.playedBy[v.id] || 0) + 1;
   };
   return C;
 }

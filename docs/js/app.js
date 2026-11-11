@@ -4,9 +4,11 @@ import { Plant, LSystem, Turtle, makeRandom, DRAW } from "./lsys.js";
 import { Garden, LOOP_BARS, MAX_LAYERS, MAX_FOREST, SCALE_NAMES, ARP_MODES, ARP_RATES, ARP_ENGINES, noteName, hashSeed, validatePlant } from "./garden.js";
 import { ARCHETYPES } from "./roots.js";
 import { initPalette } from "./palette.js";
+import { BUILTIN, specOf, isSample } from "./voices.js";
+import { putSample, listSamples, deleteSample, nextSampleId, persistentSamples, bankFile, readBankFile, AUDIO_EXT } from "./samples.js";
 import { OscWs } from "./osc-ws.js";
 import { Stage, arrangeForest } from "./stage.js";
-import { addPanel, group, slider, select, buttons, button, note, refreshAll, openPanel, togglePanel, applyDefaultPanels, controls, onRefresh } from "./ui.js";
+import { addPanel, group, slider, select, buttons, button, note, refreshAll, openPanel, togglePanel, applyDefaultPanels, controls, onRefresh, randomize } from "./ui.js";
 import { initGestures } from "./gestures.js";
 import { setupLabel, encodeSetup, decodeSetup, createStore, exportText, parseImport } from "./setups.js";
 
@@ -186,6 +188,7 @@ function applySetup(s, at, bars) {
   S.delay = G.delays.saw.amount;
   syncUrl();
   emit("state", S);
+  if (G.samples.length && S.missingSamples) S.missingSamples().then((m) => { if (m.length) say("missing: " + m.map((x) => x.name).join(", ") + "; built-in voices play"); });
 }
 function stepGlide() {
   const g = glide, f = Math.min(1, (nowBeats() - g.at) / g.len);
@@ -263,6 +266,17 @@ export const act = {
   arpCycle() { const i = ARP_MODES.indexOf(G.arp.mode); G.setArp({ mode: ARP_MODES[(i + 1) % ARP_MODES.length] }); emit("state", S); },
   mode(m) { S.mode = m || (S.mode === "wall" ? "norns" : "wall"); resize(); emit("state", S); },
   blackout(v) { v === undefined ? window.sonarBlackout.toggle() : window.sonarBlackout.set(v); },
+  // a latching silence: the garden keeps playing and drawing, nothing sounds until it is pressed again
+  kill(v) { S.kill = v === undefined ? !S.kill : !!v; emit("state", S); },
+  // every control marked random, from one seed; the values land in the setup and its share link
+  randomize(seed) {
+    if (live()) return;
+    const sd = (seed ?? newSeed()) >>> 0;
+    randomize(makeRandom(sd));
+    G.randomSeed = sd;
+    emit("state", S);
+    return sd;
+  },
   panic(v) {
     S.panic = v === undefined ? !S.panic : !!v;
     document.getElementById("panic").classList.toggle("show", S.panic);
@@ -282,6 +296,10 @@ export const act = {
     emit("state", S);
   },
   roots(o) { if (live()) return; G.setRoots(S.active, o); emit("state", S); },
+  voice(id, k, v) { G.setVoiceParam(id, k, v); emit("state", S); },
+  mixVoice(id, o) { G.setMixVoice(id, o); emit("state", S); },
+  fx(o) { G.setFx(o); emit("state", S); },
+  plantOpt(o) { if (live()) return; G.setPlantOpt(S.active, o); emit("state", S); },
   bass(o) { G.setBass(o); emit("state", S); },
   forest(o) { if (live()) return; G.setForest(o); S.instr = G.instr; if (S.active > G.plants.length) act.plant(1); emit("state", S); },
   // o.now: at once, without waiting for the bar line. Sim only: a live garden belongs to the norns
@@ -356,7 +374,7 @@ const angleOf = () => plants[S.active - 1].angle ?? 0;
 const lengthOf = () => plants[S.active - 1].userScale ?? 1;
 const pTempo = addPanel("tempo", "tempo", { open: true });
 group(pTempo, "tempo and key");
-slider(pTempo, { id: "r-bpm", label: "bpm", min: 20, max: 300, get: () => S.bpm, set: (v) => act.bpm(v) });
+slider(pTempo, { id: "r-bpm", label: "bpm", min: 20, max: 300, rlo: 60, rhi: 140, get: () => S.bpm, set: (v) => act.bpm(v) });
 slider(pTempo, { id: "r-pitch", label: "pitch", min: -24, max: 24, get: () => G.pitch, set: (v) => act.pitch(v), fmt: signed });
 const rootOpts = []; for (let n = 33; n <= 60; n++) rootOpts.push([n, noteName(n)]);
 select(pTempo, { id: "s-root", label: "root", options: rootOpts, get: () => G.key.root, set: (v) => act.key(v, undefined) });
@@ -401,7 +419,11 @@ buttons(pPlants, [
 ]);
 slider(pPlants, { id: "r-angle", label: "angle", min: -360, max: 360, get: () => angleOf(), set: (v) => act.angle(v), fmt: (x) => Math.round(x) + " deg", random: false });
 slider(pPlants, { id: "r-length", label: "length", min: 0.35, max: 1.6, step: 0.01, get: () => lengthOf(), set: (v) => act.length(v), fmt: (x) => x.toFixed(2), random: false });
-const VOICE_OPTS = [["", "default"], ["saw", "saw"], ["rain", "rain"]];
+// sounds stored in this browser stay routable, whatever setup is loaded
+let storedRefs = [];
+const sampleRefs = () => { const m = new Map(); for (const x of [...storedRefs, ...G.samples]) m.set(x.id, x); return [...m.values()].sort((a, b) => Number(a.id.slice(3)) - Number(b.id.slice(3))); };
+const voiceOpts = () => [["", "default"], ...BUILTIN.map((v) => [v, v]), ...sampleRefs().map((x) => [x.id, `smp ${x.id.slice(3)} (${x.name})`])];
+const VOICE_OPTS = voiceOpts();
 const sRoute = select(pPlants, { id: "s-route", label: "voice", label2: "active plant voice", options: VOICE_OPTS, get: () => G.routes[S.active] ?? "", set: (v) => act.route(S.active, v), random: false });
 const sLoopRoute = select(pPlants, { id: "s-route-loops", label: "loop voice", options: VOICE_OPTS, get: () => G.layerRoute ?? "", set: (v) => act.layerRoute(v), random: false });
 buttons(pPlants, [
@@ -414,6 +436,133 @@ const palHost = document.createElement("div"); palHost.id = "palette"; pPlants.a
 const pal = initPalette({ host: palHost, D, catalog, act, store: plantStore, say: (t) => { const n = document.getElementById("setup-note"); if (n) n.textContent = t; },
   state: () => ({ instr: G.instr[S.active - 1], archetype: G.roots[S.active]?.archetype }) });
 onRefresh(pal.refresh);
+
+group(pPlants, "active plant");
+select(pPlants, { id: "s-pmode", label: "pitch mode", options: [["flora", "flora"], ["walk", "walk"]], get: () => G.plantOpts[S.active]?.mode ?? "flora", set: (v) => act.plantOpt({ mode: v }) });
+slider(pPlants, { id: "r-wild", label: "wildness", min: 0, max: 0.6, step: 0.01, get: () => G.plantOpts[S.active]?.wildness ?? 0, set: (v) => act.plantOpt({ wildness: v }), fmt: (x) => Math.round(x * 100) + " %" });
+slider(pPlants, { id: "r-pdensity", label: "density", label2: "plant density", min: 0, max: 1, step: 0.01, rlo: 0.5, rhi: 1, get: () => G.plantOpts[S.active]?.density ?? 1, set: (v) => act.plantOpt({ density: v }), fmt: (x) => Math.round(x * 100) + " %" });
+
+// ------------------------------------------------------------------ voices, space, sounds, banks
+const pVoices = addPanel("voices", "voices");
+S.editVoice = "pluck";
+const allVoices = () => [...BUILTIN, ...sampleRefs().map((x) => x.id)];
+group(pVoices, "mixer");
+for (const id of BUILTIN) group(pVoices, id, {
+  solo: { id: `b-solo-${id}`, label: `${id} solo`, get: () => !!G.mix[id]?.solo, set: (v) => act.mixVoice(id, { solo: v }) },
+  mute: { id: `b-mute-${id}`, label: `${id} mute`, get: () => !!G.mix[id]?.mute, set: (v) => act.mixVoice(id, { mute: v }) },
+});
+group(pVoices, "edit");
+const sEdit = select(pVoices, { id: "s-voice-edit", label: "voice", options: allVoices(), get: () => S.editVoice, set: (v) => { S.editVoice = v; refreshAll(); }, random: false });
+const vRows = [];
+const tag = (el, voice) => { const row = el.closest(".ctl, .btns") || el; row.dataset.voice = voice; vRows.push(row); };
+for (const id of [...BUILTIN, "smp"]) {
+  const spec = specOf(id === "smp" ? "smp1" : id), cur = () => (id === "smp" ? S.editVoice : id);
+  for (const [k, sp] of Object.entries(spec)) {
+    const sid = `v-${id}-${k}`;
+    if (sp.bool) { tag(buttons(pVoices, [{ id: "b-" + sid, label: k, label2: `${id} ${k}`, fire: () => act.voice(cur(), k, !G.voiceParams[cur()]?.[k]), on: () => !!G.voiceParams[cur()]?.[k] }]), id); continue; }
+    const fmt = (x) => (sp.step >= 1 ? String(Math.round(x)) : Number(x).toFixed(sp.step < 0.01 ? 3 : 2)) + (sp.unit ? " " + sp.unit : "");
+    tag(slider(pVoices, { id: "r-" + sid, label: k, label2: `${id} ${k}`, min: sp.lo, max: sp.hi, step: sp.step, rlo: sp.rlo, rhi: sp.rhi, random: !sp.norand, get: () => G.voiceParams[cur()]?.[k] ?? sp.def, set: (v) => act.voice(cur(), k, v), fmt }), id);
+  }
+}
+// delay for the voice being edited (saw and rain keep their own rows in the delay tab)
+const dOf = () => G.delays[S.editVoice] || { amount: 0, div: "d1/8", feedback: 0.45, lowpass: 2400, pingpong: false };
+group(pVoices, "delay, edit voice");
+slider(pVoices, { id: "r-vdamt", label: "amount", label2: "edit voice delay", min: 0, max: 1, step: 0.01, get: () => dOf().amount, set: (v) => act.delayOf(S.editVoice, { amount: v }), fmt: (x) => x.toFixed(2) });
+select(pVoices, { id: "s-vddiv", label: "time", label2: "edit voice delay time", options: [["1/16", "1/16"], ["1/8", "1/8"], ["d1/8", "dotted 1/8"], ["1/4", "1/4"], ["1/2", "1/2"]], get: () => dOf().div, set: (v) => act.delayOf(S.editVoice, { div: v }) });
+slider(pVoices, { id: "r-vdfb", label: "feedback", label2: "edit voice delay feedback", min: 0, max: 0.85, step: 0.01, get: () => dOf().feedback, set: (v) => act.delayOf(S.editVoice, { feedback: v }), fmt: (x) => x.toFixed(2) });
+onRefresh(() => { const want = isSample(S.editVoice) ? "smp" : S.editVoice; for (const r of vRows) { const h = r.dataset.voice !== want; if (r.hidden !== h) r.hidden = h; } });
+
+group(pVoices, "space");
+slider(pVoices, { id: "r-reverb", label: "reverb", min: 0, max: 1, step: 0.01, rlo: 0, rhi: 0.5, get: () => G.fx.reverb.amount, set: (v) => act.fx({ reverb: { amount: v } }), fmt: (x) => x.toFixed(2) });
+slider(pVoices, { id: "r-revsize", label: "reverb size", min: 0.3, max: 8, step: 0.1, rlo: 1, rhi: 5, get: () => G.fx.reverb.size, set: (v) => act.fx({ reverb: { size: v } }), fmt: (x) => x.toFixed(1) + " s" });
+slider(pVoices, { id: "r-wind", label: "wind", min: 0, max: 1, step: 0.01, rlo: 0, rhi: 0.4, get: () => G.fx.wind.level, set: (v) => act.fx({ wind: { level: v } }), fmt: (x) => x.toFixed(2) });
+slider(pVoices, { id: "r-windtone", label: "wind tone", min: 100, max: 4000, step: 10, get: () => G.fx.wind.tone, set: (v) => act.fx({ wind: { tone: v } }), fmt: (x) => Math.round(x) + " Hz" });
+
+group(pVoices, "sounds");
+note(pVoices, "Files stay in this browser. Nothing is uploaded.", "smp-privacy");
+const smpNote = note(pVoices, "", "smp-note");
+const smpPick = Object.assign(document.createElement("input"), { type: "file", accept: "audio/*,.wav,.mp3,.m4a,.ogg,.flac,.aif,.aiff", multiple: true, id: "f-smp" });
+smpPick.style.display = "none"; pVoices.appendChild(smpPick);
+const refillVoices = async () => {
+  try { storedRefs = (await listSamples()).map((x) => ({ id: x.id, name: x.name })); } catch { storedRefs = []; }
+  sEdit.refill(allVoices()); sRoute.refill(voiceOpts()); sLoopRoute.refill(voiceOpts()); refreshAll();
+};
+refillVoices();
+async function decodeInto(rec) {
+  const A = S.audio;
+  if (!A) return;
+  try { A.chain.setSample(rec.id, await A.ctx.decodeAudioData(rec.bytes.slice(0))); A.chain.setVoices(G.voiceParams); }
+  catch (e) { smpNote.textContent = `${rec.name}: the browser cannot decode it`; }
+}
+async function addSounds(files) {
+  let n = 0;
+  for (const f of files) {
+    if (f.size > 50 * 1024 * 1024) { smpNote.textContent = `${f.name}: over 50 MB`; continue; }
+    const id = nextSampleId(await listSamples());
+    const rec = { id, name: f.name.slice(0, 80), type: f.type, bytes: await f.arrayBuffer() };
+    await putSample(rec);
+    G.addSampleRef(id, rec.name);
+    await decodeInto(rec);
+    n++;
+  }
+  await refillVoices();
+  if (n) smpNote.textContent = `added ${n}` + ((await persistentSamples()) ? "" : ", for this page only");
+}
+smpPick.onchange = () => { addSounds([...smpPick.files]); smpPick.value = ""; };
+buttons(pVoices, [
+  { id: "b-smp-add", label: "add sounds", noMap: true, fire: () => smpPick.click() },
+  { id: "b-smp-remove", label: "remove edit voice", noMap: true, fire: async () => { const id = S.editVoice; if (!isSample(id)) return; await deleteSample(id); G.removeSampleRef(id); S.editVoice = "pluck"; refillVoices(); smpNote.textContent = `removed ${id}`; } },
+]);
+
+group(pVoices, "banks");
+const bankStore = createStore("sonar.banks.v1");
+const bankName = Object.assign(document.createElement("input"), { type: "text", maxLength: 40, autocomplete: "off", id: "t-bank-name" });
+{ const row = document.createElement("div"); row.className = "ctl"; const l = document.createElement("label"); l.textContent = "name"; l.htmlFor = bankName.id; row.append(l, bankName); pVoices.appendChild(row); }
+const bankSel = document.createElement("select"); bankSel.id = "s-bank";
+{ const row = document.createElement("div"); row.className = "ctl"; const l = document.createElement("label"); l.textContent = "saved"; l.htmlFor = bankSel.id; row.append(l, bankSel); pVoices.appendChild(row); }
+const refillBanks = () => { const was = bankSel.value; bankSel.textContent = ""; for (const x of bankStore.list()) { const o = document.createElement("option"); o.value = o.textContent = x.name; bankSel.appendChild(o); } if ([...bankSel.options].some((o) => o.value === was)) bankSel.value = was; };
+const bankNow = (name) => ({ sonar_bank: 1, name, voices: JSON.parse(JSON.stringify(G.voiceParams)), samples: G.samples.map((x) => ({ ...x })) });
+async function missingSamples() { const have = new Set((await listSamples()).map((x) => x.id)); return G.samples.filter((x) => !have.has(x.id)); }
+async function useBank(b) {
+  for (const [id, p] of Object.entries(b.voices || {})) for (const [k, v] of Object.entries(p)) G.setVoiceParam(id, k, v);
+  for (const x of b.samples || []) G.addSampleRef(x.id, x.name);
+  G.bankName = b.name ?? null;
+  const miss = await missingSamples();
+  smpNote.textContent = miss.length ? "missing: " + miss.map((x) => x.name).join(", ") : `bank ${b.name ?? ""}`;
+  refillVoices(); emit("state", S);
+}
+const bankPick = Object.assign(document.createElement("input"), { type: "file", accept: ".sonarbank,.zip", id: "f-bank" });
+bankPick.style.display = "none"; pVoices.appendChild(bankPick);
+async function importBank(file) {
+  try {
+    const { bank, audio } = await readBankFile(await file.arrayBuffer());
+    const have = await listSamples(), remap = {};
+    const samples = [];
+    for (const x of bank.samples || []) {
+      const bytes = audio.get(x.file);
+      if (!bytes) continue;
+      const id = nextSampleId([...have, ...samples]);
+      remap[x.id] = id;
+      await putSample({ id, name: String(x.name).slice(0, 80), type: "", bytes: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) });
+      samples.push({ id, name: String(x.name).slice(0, 80) });
+    }
+    const voices = {};
+    for (const [id, p] of Object.entries(bank.voices || {})) voices[remap[id] || id] = p;
+    const b = { sonar_bank: 1, name: String(bank.name || file.name).slice(0, 40), voices, samples };
+    bankStore.put(b.name, b); refillBanks(); bankSel.value = b.name;
+    await useBank(b);
+    for (const x of samples) { const rec = (await listSamples()).find((r) => r.id === x.id); if (rec) await decodeInto(rec); }
+  } catch (e) { smpNote.textContent = "bank not readable"; }
+}
+bankPick.onchange = () => { if (bankPick.files[0]) importBank(bankPick.files[0]); bankPick.value = ""; };
+buttons(pVoices, [
+  { id: "b-bank-save", label: "save", noMap: true, fire: () => { const n = bankName.value.trim() || bankStore.nextSlot(); bankStore.put(n, bankNow(n)); G.bankName = n; bankName.value = ""; refillBanks(); bankSel.value = n; smpNote.textContent = `saved bank ${n}`; } },
+  { id: "b-bank-load", label: "load", noMap: true, fire: () => { const b = bankStore.get(bankSel.value); if (b) useBank(b); } },
+  { id: "b-bank-export", label: "export", noMap: true, fire: async () => { const b = bankStore.get(bankSel.value) || bankNow(G.bankName || "bank"); const blob = await bankFile(b); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `sonar_bank_${safeName(b.name || "bank")}_v01.sonarbank`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); } },
+  { id: "b-bank-import", label: "import", noMap: true, fire: () => bankPick.click() },
+]);
+refillBanks();
+S.missingSamples = missingSamples;
 
 const pRoots = addPanel("roots", "roots");
 group(pRoots, "roots, active plant");
@@ -487,7 +636,16 @@ async function importFiles(files) {
 }
 importBox.onchange = () => { importFiles([...importBox.files]); importBox.value = ""; };
 window.addEventListener("dragover", (e) => { if ([...(e.dataTransfer?.types || [])].includes("Files")) e.preventDefault(); });
-window.addEventListener("drop", (e) => { if (e.dataTransfer?.files?.length) { e.preventDefault(); importFiles([...e.dataTransfer.files]); } });
+window.addEventListener("drop", (e) => {
+  const fs = [...(e.dataTransfer?.files || [])];
+  if (!fs.length) return;
+  e.preventDefault();
+  const audio = fs.filter((f) => f.type.startsWith("audio/") || AUDIO_EXT.test(f.name)), banks = fs.filter((f) => /\.(sonarbank|zip)$/i.test(f.name));
+  if (audio.length) addSounds(audio);
+  for (const b of banks) importBank(b);
+  const rest = fs.filter((f) => !audio.includes(f) && !banks.includes(f));
+  if (rest.length) importFiles(rest);
+});
 const linkBox = mkField("t-setup-link", "link", Object.assign(document.createElement("input"), { type: "text", readOnly: true }));
 buttons(pSetups, [
   { id: "b-setup-export", label: "export", noMap: true, fire: () => { const x = store.list().find((y) => y.name === savedSel.value); if (x) download(`sonar_setup_${safeName(x.name)}_v01.json`, exportText([x], plantStore.list())); } },
@@ -504,6 +662,10 @@ refillSaved();
 const pMore = addPanel("more", "more");
 group(pMore, "output");
 slider(pMore, { id: "r-master", label: "vol", min: 0, max: 1, step: 0.01, get: () => S.master ?? 0.7, set: (v) => { S.master = v; emit("state", S); }, fmt: (x) => x.toFixed(2), random: false });
+buttons(pMore, [
+  { id: "b-kill", label: "kill", title: "a latching silence; press again to sound", fire: () => act.kill(), on: () => !!S.kill },
+  { id: "b-randomize", label: "randomize", fire: () => { const sd = act.randomize(); const n = document.getElementById("setup-note"); if (n && sd !== undefined) n.textContent = `randomized ${sd}`; } },
+]);
 buttons(pMore, [
   { id: "b-engine", label: "saw", title: "E", fire: () => act.engineCycle() },
   { id: "b-reset", label: "reset", title: "Shift+R", fire: () => act.reset() },
@@ -709,6 +871,8 @@ $("b-enable").onclick = async () => {
   try {
     const m = await import("./audio.js");
     await m.enable({ S, on, act, catalog });
+    for (const rec of await listSamples()) { if (!G.samples.some((x) => x.id === rec.id)) G.addSampleRef(rec.id, rec.name); await decodeInto(rec); }
+    refillVoices();
     $("b-enable").classList.add("on");
     $("b-enable").textContent = "enabled";
   } catch (e) {

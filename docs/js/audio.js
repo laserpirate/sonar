@@ -20,8 +20,9 @@ export async function enable({ S, on, act }) {
 
   const setMaster = (v) => { S.master = Math.max(0, Math.min(1, v)); C.setMaster(S.master); const r = document.getElementById("r-master"); if (r) r.value = S.master; };
   const getMaster = () => S.master;
-  const muted = () => S.blackoutOn || S.panic;
-  window.sonarBlackout.hook((v) => { C.setMute(v || S.panic); if (v) C.allOff(); });
+  const muted = () => S.blackoutOn || S.panic || S.kill; // kill: a latching silence; the garden keeps drawing
+  window.sonarBlackout.hook((v) => { C.setMute(v || S.panic || S.kill); if (v) C.allOff(); });
+  C.setVoices(G.voiceParams); C.setMix(G.mix); C.setFx(G.fx);
   on("state", () => {
     C.setMute(muted());
     C.setMaster(S.master);
@@ -29,7 +30,8 @@ export async function enable({ S, on, act }) {
     C.setBpm(S.bpm);
     C.setBass(G.bass);
     C.setDrone(muted() ? 0 : G.droneHz(), G.bass.drone);
-    if (S.panic) C.allOff();
+    C.setVoices(G.voiceParams); C.setMix(G.mix); C.setFx(G.fx);
+    if (S.panic || S.kill) C.allOff();
   });
 
   const liveAudio = q.get("liveaudio") === "1";
