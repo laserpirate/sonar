@@ -1,17 +1,20 @@
 // setups.js · labels, the local store, files and share links for a setup (Garden.toSetup / fromSetup).
 // No DOM here beyond localStorage, so the tests can run it in Node.
 
-const pid = (n) => "p" + String(n).padStart(2, "0");
+export const pid = (n) => (n > 1000 ? "u" + (n - 1000) : "p" + String(n).padStart(2, "0"));
 const MAX_LINK = 65536;     // encoded characters a share link may carry
 const MAX_JSON = 524288;    // bytes a link or file may expand to
 
 // the id and the facts, nothing else: "s04 · p06 p11 · 72 bpm · arp rain 1/8"
 export function setupLabel(s, id = s.id) {
-  const parts = [(s.plants || []).map((p) => pid(p.instr)).join(" "), `${s.bpm ?? 90} bpm`];
+  const ps = s.plants || [];
+  const parts = [ps.length > 4 ? `forest ${ps.length}` : ps.map((p) => (p.custom ? "user" : pid(p.instr))).join(" "), `${s.bpm ?? 90} bpm`];
   for (const [e, a] of Object.entries(s.arps || {})) if (a.mode && a.mode !== "off") parts.push(`arp ${e} ${a.rate || "1/8"}`);
   if (s.layers?.length) parts.push(`${s.layers.length} loops`);
   if (s.growth) parts.push(`growth ${s.growth}`);
   if (s.engineMode && s.engineMode !== "saw") parts.push(s.engineMode);
+  const roots = ps.filter((p) => p.roots?.archetype).map((p) => p.roots.archetype);
+  if (roots.length) parts.push("roots " + [...new Set(roots)].join(" "));
   return (id ? id + " · " : "") + parts.join(" · ");
 }
 
@@ -67,17 +70,18 @@ export function createStore(key = "sonar.setups.v1") {
   };
 }
 
-export const exportText = (items) => JSON.stringify({ sonar_setups: 1, setups: items }, null, 1);
-// accepts an export, a list, or one bare setup; returns [{name, setup}]
+export const exportText = (items, plants = []) => JSON.stringify({ sonar_setups: 1, setups: items, plants }, null, 1);
+// accepts an export, a list, or one bare setup; returns [{name, setup}] with the user plants in .plants
 export function parseImport(text) {
   if (text.length > 8 * MAX_JSON) throw new Error("file too large");
   const data = JSON.parse(text);
-  const raw = Array.isArray(data) ? data : Array.isArray(data?.setups) ? data.setups : [data];
+  const raw = Array.isArray(data) ? data : Array.isArray(data?.setups) ? data.setups : data?.sonar_setups ? [] : [data];
   const out = [];
   for (const x of raw) {
     const setup = x?.setup ?? x;
     if (!setup || setup.v !== 1) throw new Error("not a sonar setup");
     out.push({ name: x?.name != null ? String(x.name).slice(0, 40) : null, setup });
   }
+  out.plants = (Array.isArray(data?.plants) ? data.plants : []).map((x) => ({ name: x?.name != null ? String(x.name).slice(0, 40) : null, def: x?.setup ?? x?.def }));
   return out;
 }

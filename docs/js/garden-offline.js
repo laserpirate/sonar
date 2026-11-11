@@ -21,6 +21,11 @@ export async function renderGarden(catalog, opts = {}) {
   if (opts.layerRoute) G.setLayerRoute(opts.layerRoute);
   if (opts.arps) for (const [e, o] of Object.entries(opts.arps)) G.setArp(o, e);
   if (opts.flourish) G.setFlourish(opts.flourish);
+  if (opts.forest) G.setForest(opts.forest);
+  if (opts.roots) for (const [id, o] of Object.entries(opts.roots)) G.setRoots(Number(id), o);
+  if (opts.bass) G.setBass(opts.bass);
+  C.setBass(G.bass);
+  let droneAt = -1;
   if (opts.pitch) G.setPitch(opts.pitch);
   if (opts.growth) G.setGrowth(opts.growth);
   if (opts.key) G.setKey(opts.key[0], opts.key[1]);
@@ -40,9 +45,11 @@ export async function renderGarden(catalog, opts = {}) {
       while (reseeds.length && reseeds[0].beat <= now) { const r = reseeds.shift(); G.seed(r.seed); log.push({ k: "reseed", t: now, seed: r.seed }); }
       for (const ev of G.step(now)) {
         const when = ev.t / bps;
-        C.playNote(ev, bpm, Math.max(when, frame * dt));
-        log.push({ k: ev.arp ? "arp" : ev.flourish ? "flourish" : ev.layer ? "loop" : "note", t: ev.t, note: ev.note, plant: ev.plant, engine: ev.engine });
+        if (!ev.silent) C.playNote(ev, bpm, Math.max(when, frame * dt));
+        log.push({ k: ev.arp ? "arp" : ev.flourish ? "flourish" : ev.bass ? "bass" : ev.chorus ? "chorus" : ev.layer ? "loop" : "note", t: ev.t, note: ev.note, plant: ev.plant, engine: ev.engine, silent: !!ev.silent });
       }
+      const hz = G.droneHz();
+      if (hz !== droneAt) { droneAt = hz; C.setDrone(hz, G.bass.drone); }
     }
   };
   for (let s = 1; s < seconds; s++) ctx.suspend(s).then(() => { drive(s + 1); ctx.resume(); });

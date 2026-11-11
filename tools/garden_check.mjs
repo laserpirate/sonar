@@ -2,6 +2,8 @@
 //   node tools/garden_check.mjs
 import { readFileSync } from "node:fs";
 import { Garden, LOOP_BEATS, scaleOfLength } from "../docs/js/garden.js";
+import { growRoots, ARCHETYPES } from "../docs/js/roots.js";
+import { maxConcurrent } from "../docs/js/player.js";
 const catalog = JSON.parse(readFileSync(new URL("../docs/js/catalog.json", import.meta.url)));
 const run = (seed, beats, f) => { const g = new Garden({ catalog, seed }); f?.(g); const evs = []; for (let b = 0; b <= beats; b += 0.05) evs.push(...g.step(b)); return { g, evs }; };
 const sig = (evs) => evs.map((e) => `${e.plant}:${e.note}@${e.t.toFixed(3)}`).join(" ");
@@ -71,6 +73,30 @@ const factory = JSON.parse(readFileSync(new URL("../docs/js/setups.json", import
 out.factory = factory.map((f) => play(new Garden({ catalog, seed: 1 }).fromSetup(f, 0), 64).length);
 // 15 a reseed keeps the plants array the page holds
 const held = orig.plants; orig.seed(3); out.plantsHeld = held === orig.plants && held[0] === orig.plants[0] && !!held[0].lsys;
+// 16 forest: deterministic from the seed, and the conductor's own count never passes the budget
+const forest = (seed) => { const g = new Garden({ catalog, seed }); g.setForest({ n: 16, leads: 2, density: 0.8, budget: 6 }); g.setRoots(1, { archetype: "taproot" }); g.setArp({ mode: "up", rate: "1/16" }); return g; };
+const fa = forest(9), fb = forest(9);
+const fevA = play(fa, 128), fevB = play(fb, 128);
+const fsig = (evs) => evs.map((e) => `${e.plant}:${e.note}:${e.silent ? 0 : 1}:${e.bass ? "b" : ""}@${e.t.toFixed(4)}`).join(" ");
+const sounding = fevA.filter((e) => !e.silent);
+const spans = sounding.map((e) => [e.t * 60 / fa.bpm, e.t * 60 / fa.bpm + fa._lenOf(e)]);
+const perBarLead = new Map();
+for (const e of sounding) if (!e.arp && !e.bass && !e.chorus && !e.flourish && !e.layer) { const k = Math.floor(e.t / 4); if (!perBarLead.has(k)) perBarLead.set(k, new Set()); perBarLead.get(k).add(e.plant); }
+const chorusPerBar = new Map();
+for (const e of sounding) if (e.chorus) { const k = `${Math.floor(e.t / 4)}:${e.plant}`; chorusPerBar.set(k, (chorusPerBar.get(k) || 0) + 1); }
+out.forest = { same: fsig(fevA) === fsig(fevB), events: fevA.length, sounding: sounding.length, maxVoices: maxConcurrent(spans), leadsPerBarMax: Math.max(...[...perBarLead.values()].map((x) => x.size)),
+  chorusOnce: [...chorusPerBar.values()].every((n) => n === 1), lit: new Set(fevA.filter((e) => !e.arp && !e.bass && !e.chorus).map((e) => e.plant)).size, bass: fevA.filter((e) => e.bass && !e.silent).length };
+// 17 two plants: forest code leaves v0.2.0's garden alone (no conductor, nothing silent)
+out.twoPlantsClean = play(new Garden({ catalog, seed: 42 }), 64).every((e) => !e.silent && !e.chorus && e.voiceKey === undefined);
+// 18 roots: every archetype has tips; same seed, same roots
+out.roots = Object.fromEntries(ARCHETYPES.map((a) => { const p = { archetype: a, depth: 0.6, spread: 0.5, density: 0.5 }; const r1 = growRoots(p, { x: 0, y: 0 }, 30, 5), r2 = growRoots(p, { x: 0, y: 0 }, 30, 5); return [a, { tips: r1.tips.length, same: JSON.stringify(r1) === JSON.stringify(r2), below: r1.segments.every((q) => q.y2 >= -0.01) }]; }));
+// 19 setup round trip with a forest, roots, a user plant
+const fo = new Garden({ catalog, seed: 21 }); fo.setForest({ n: 7, leads: 3, density: 0.4, budget: 5 }); fo.setRoots(2, { archetype: "rhizome", depth: 0.3 }); fo.setBass({ sync: 6, octave: -2 });
+fo.setup(3, fo.addCustom({ axiom: "X", rules: [["X", "F[+X][-X]FX"], ["F", "FF"]], angle: 22, length: 6, start: 3 }));
+const fs = JSON.parse(JSON.stringify(fo.toSetup()));
+const fr = new Garden({ catalog, seed: 1 }).fromSetup(fs, 0);
+out.forestSetup = { dataEqual: JSON.stringify(fr.toSetup()) === JSON.stringify(fs), logsEqual: fsig(play(fo, 128)) === fsig(play(fr, 128)), n: fr.plants.length };
 console.log(JSON.stringify(out, null, 1));
-const ok = out.setup.dataEqual && out.setup.logsEqual && out.setup.notes > 50 && out.setup.sentencesKept && out.setup.lateEqual && out.setupRefused && out.factory.length === 12 && out.factory.every((n) => n > 5) && out.plantsHeld && out.twoArps.saw > 10 && out.twoArps.rain > 10 && out.twoArps.plant1Saw && out.twoArps.plant2Rain && Math.abs(out.euclid.perBar16 - 5) < 0.51 && out.flourish.n > 0 && out.flourish.same && out.flourish.otherEngine && out.defaultsClean && out.determinism && out.layer.loopIdentical && out.layer.start === 4 && out.maxLayers === 4 && out.cleared && out.arp.notes > 20 && out.key.sameTimes && out.key.differentNotes && out.pitch;
+const ok = out.forest.same && out.forest.maxVoices <= 6 && out.forest.leadsPerBarMax <= 2 && out.forest.chorusOnce && out.forest.lit === 16 && out.forest.bass > 5 && out.twoPlantsClean &&
+  Object.values(out.roots).every((r) => r.tips > 2 && r.same && r.below) && out.forestSetup.dataEqual && out.forestSetup.logsEqual && out.forestSetup.n === 7 && out.setup.dataEqual && out.setup.logsEqual && out.setup.notes > 50 && out.setup.sentencesKept && out.setup.lateEqual && out.setupRefused && out.factory.length === 12 && out.factory.every((n) => n > 5) && out.plantsHeld && out.twoArps.saw > 10 && out.twoArps.rain > 10 && out.twoArps.plant1Saw && out.twoArps.plant2Rain && Math.abs(out.euclid.perBar16 - 5) < 0.51 && out.flourish.n > 0 && out.flourish.same && out.flourish.otherEngine && out.defaultsClean && out.determinism && out.layer.loopIdentical && out.layer.start === 4 && out.maxLayers === 4 && out.cleared && out.arp.notes > 20 && out.key.sameTimes && out.key.differentNotes && out.pitch;
 console.log(ok ? "OK" : "FAIL"); process.exit(ok ? 0 : 1);

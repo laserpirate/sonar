@@ -1,10 +1,12 @@
 // app.js · sonar page: renderer + sim garden (garden.js) + live (OSC over WebSocket) + keys + controls.
 // Audio engines and MIDI load only after the Enable click (audio.js, midi.js).
 import { Plant, LSystem, Turtle, makeRandom, DRAW } from "./lsys.js";
-import { Garden, LOOP_BARS, MAX_LAYERS, SCALE_NAMES, ARP_MODES, ARP_RATES, ARP_ENGINES, noteName } from "./garden.js";
+import { Garden, LOOP_BARS, MAX_LAYERS, MAX_FOREST, SCALE_NAMES, ARP_MODES, ARP_RATES, ARP_ENGINES, noteName, hashSeed, validatePlant } from "./garden.js";
+import { ARCHETYPES } from "./roots.js";
+import { initPalette } from "./palette.js";
 import { OscWs } from "./osc-ws.js";
-import { Stage } from "./stage.js";
-import { addPanel, group, slider, select, buttons, button, note, refreshAll, openPanel, togglePanel, applyDefaultPanels, controls } from "./ui.js";
+import { Stage, arrangeForest } from "./stage.js";
+import { addPanel, group, slider, select, buttons, button, note, refreshAll, openPanel, togglePanel, applyDefaultPanels, controls, onRefresh } from "./ui.js";
 import { initGestures } from "./gestures.js";
 import { setupLabel, encodeSetup, decodeSetup, createStore, exportText, parseImport } from "./setups.js";
 
@@ -13,7 +15,7 @@ const catalog = await (await fetch(new URL("./catalog.json", import.meta.url))).
 const D = catalog.defaults;
 const NPRESETS = catalog.plants.length;
 const factory = await fetch(new URL("./setups.json", import.meta.url)).then((r) => r.json()).catch(() => []);
-const pid = (n) => "p" + String(n).padStart(2, "0");
+const pid = (n) => (n > 1000 ? "u" + (n - 1000) : "p" + String(n).padStart(2, "0"));
 const newSeed = () => ((Date.now() ^ (Math.random() * 0xffffffff)) >>> 0) % 1000000 + 1;
 
 // ------------------------------------------------------------------ state
@@ -115,7 +117,7 @@ function liveGenMsg(a) {
 // ------------------------------------------------------------------ note events (sim or live)
 function noteEvent(ev) {
   const { plant, idx, x, y } = ev;
-  if (idx > 0) litOf(plant).set(idx, 1);
+  if (idx) litOf(plant).set(idx, 1); // negative: a root tip
   if (!ev.arp && !ev.flourish) noteAt.set(plant, { x, y, idx, t: performance.now() });
   S.notes++;
   S.lastNote = { plant, idx, note: ev.note, freq: ev.freq, arp: !!ev.arp, layer: ev.layer || 0 };
@@ -271,6 +273,17 @@ export const act = {
   isLive: () => live(),
   setup: (k, instr, gen) => G.setup(k, instr, gen), // ?score=1 shows the score's plant
   garden: () => G,
+  // a catalog number or a user plant definition, on the active plant
+  assign(x) {
+    const k = S.active - 1;
+    if (live()) { if (typeof x === "number" && x <= NPRESETS && k < 2) { S.instr[k] = x; link.send(`/param/plant${S.active}_instructions`, [x]); } return; }
+    const instr = typeof x === "number" ? x : G.addCustom(x);
+    G.setup(k, instr); S.instr = G.instr; litOf(S.active).clear();
+    emit("state", S);
+  },
+  roots(o) { if (live()) return; G.setRoots(S.active, o); emit("state", S); },
+  bass(o) { G.setBass(o); emit("state", S); },
+  forest(o) { if (live()) return; G.setForest(o); S.instr = G.instr; if (S.active > G.plants.length) act.plant(1); emit("state", S); },
   // o.now: at once, without waiting for the bar line. Sim only: a live garden belongs to the norns
   loadSetup(s, o = {}) {
     if (live()) return false;
@@ -394,7 +407,33 @@ const sLoopRoute = select(pPlants, { id: "s-route-loops", label: "loop voice", o
 buttons(pPlants, [
   { id: "b-gen", label: "next gen", title: "N or two-finger tap", fire: () => act.nextGen() },
   { id: "b-palette", label: "palette", title: "long press a plant", fire: () => act.palette(), noMap: true },
+  { id: "b-editor", label: "plant editor", fire: () => pal.toggleEditor(), noMap: true },
 ]);
+const plantStore = createStore("sonar.plants.v1");
+const palHost = document.createElement("div"); palHost.id = "palette"; pPlants.appendChild(palHost);
+const pal = initPalette({ host: palHost, D, catalog, act, store: plantStore, say: (t) => { const n = document.getElementById("setup-note"); if (n) n.textContent = t; },
+  state: () => ({ instr: G.instr[S.active - 1], archetype: G.roots[S.active]?.archetype }) });
+onRefresh(pal.refresh);
+
+const pRoots = addPanel("roots", "roots");
+group(pRoots, "roots, active plant");
+select(pRoots, { id: "s-roots", label: "archetype", label2: "roots archetype", options: [["", "none"], ...ARCHETYPES], get: () => G.roots[S.active]?.archetype ?? "", set: (v) => act.roots({ archetype: v || null }), random: false });
+for (const k of ["depth", "spread", "density"]) slider(pRoots, { id: "r-root-" + k, label: k, label2: "roots " + k, min: 0, max: 1, step: 0.01, get: () => G.roots[S.active]?.[k] ?? 0.5, set: (v) => act.roots({ [k]: v }), fmt: (x) => x.toFixed(2) });
+group(pRoots, "bass");
+select(pRoots, { id: "s-bass-oct", label: "octave", label2: "bass octave", options: [[-3, "-3"], [-2, "-2"], [-1, "-1"], [0, "0"], [1, "+1"]], get: () => G.bass.octave, set: (v) => act.bass({ octave: v }) });
+slider(pRoots, { id: "r-bass-level", label: "level", label2: "bass level", min: 0, max: 1, step: 0.01, get: () => G.bass.level, set: (v) => act.bass({ level: v }), fmt: (x) => x.toFixed(2) });
+slider(pRoots, { id: "r-bass-decay", label: "decay", label2: "bass decay", min: 0.05, max: 2, step: 0.01, get: () => G.bass.decay, set: (v) => act.bass({ decay: v }), fmt: (x) => x.toFixed(2) + " s" });
+slider(pRoots, { id: "r-bass-release", label: "release", label2: "bass release", min: 0.05, max: 4, step: 0.01, get: () => G.bass.release, set: (v) => act.bass({ release: v }), fmt: (x) => x.toFixed(2) + " s" });
+slider(pRoots, { id: "r-bass-detune", label: "detune", label2: "bass detune", min: 0, max: 50, step: 1, get: () => G.bass.detune, set: (v) => act.bass({ detune: v }), fmt: (x) => x + " ct" });
+select(pRoots, { id: "s-bass-sync", label: "sync", label2: "bass sync", options: [[4, "every 4th step"], [6, "every 6th step"], [8, "every 8th step"], [0, "free"]], get: () => G.bass.sync, set: (v) => act.bass({ sync: v }) });
+slider(pRoots, { id: "r-drone", label: "drone", label2: "bass drone", min: 0, max: 1, step: 0.01, get: () => G.bass.drone, set: (v) => act.bass({ drone: v }), fmt: (x) => x.toFixed(2) });
+
+const pForest = addPanel("forest", "forest");
+group(pForest, "forest");
+slider(pForest, { id: "r-forest", label: "plants", label2: "forest size", min: 2, max: MAX_FOREST, get: () => G.plants.length, set: (v) => act.forest({ n: v }), random: false });
+slider(pForest, { id: "r-leads", label: "leads", label2: "forest leads", min: 1, max: 4, get: () => G.forest.leads, set: (v) => act.forest({ leads: v }) });
+slider(pForest, { id: "r-fdensity", label: "density", label2: "forest density", min: 0, max: 1, step: 0.01, get: () => G.forest.density, set: (v) => act.forest({ density: v }), fmt: (x) => x.toFixed(2) });
+slider(pForest, { id: "r-budget", label: "voices", label2: "forest voice budget", min: 1, max: 16, get: () => G.forest.budget, set: (v) => act.forest({ budget: v }) });
 
 const pSetups = addPanel("setups", "setups");
 const store = createStore();
@@ -436,7 +475,12 @@ importBox.style.display = "none"; pSetups.appendChild(importBox);
 async function importFiles(files) {
   let n = 0;
   try {
-    for (const f of files) for (const x of parseImport(await f.text())) { G._cleanSetup(x.setup); store.put(x.name || store.nextSlot(), x.setup); n++; }
+    for (const f of files) {
+      const list = parseImport(await f.text());
+      for (const x of list) { G._cleanSetup(x.setup); store.put(x.name || store.nextSlot(), x.setup); n++; }
+      for (const pl of list.plants) { const v = validatePlant(pl.def); if (v.ok) plantStore.put(pl.name || "u" + (plantStore.list().length + 1), v.def); }
+    }
+    pal.fillUsers();
     say(`imported ${n}`);
   } catch (e) { say(`imported ${n}, then a file was not readable`); }
   refillSaved();
@@ -446,8 +490,8 @@ window.addEventListener("dragover", (e) => { if ([...(e.dataTransfer?.types || [
 window.addEventListener("drop", (e) => { if (e.dataTransfer?.files?.length) { e.preventDefault(); importFiles([...e.dataTransfer.files]); } });
 const linkBox = mkField("t-setup-link", "link", Object.assign(document.createElement("input"), { type: "text", readOnly: true }));
 buttons(pSetups, [
-  { id: "b-setup-export", label: "export", noMap: true, fire: () => { const x = store.list().find((y) => y.name === savedSel.value); if (x) download(`sonar_setup_${safeName(x.name)}_v01.json`, exportText([x])); } },
-  { id: "b-setup-all", label: "export all", noMap: true, fire: () => download("sonar_setups_all_v01.json", exportText(store.list())) },
+  { id: "b-setup-export", label: "export", noMap: true, fire: () => { const x = store.list().find((y) => y.name === savedSel.value); if (x) download(`sonar_setup_${safeName(x.name)}_v01.json`, exportText([x], plantStore.list())); } },
+  { id: "b-setup-all", label: "export all", noMap: true, fire: () => download("sonar_setups_all_v01.json", exportText(store.list(), plantStore.list())) },
   { id: "b-setup-import", label: "import", noMap: true, fire: () => importBox.click() },
   { id: "b-setup-share", label: "share link", noMap: true, fire: async () => {
     const url = location.origin + location.pathname + "#s=" + await encodeSetup(G.toSetup());
@@ -574,14 +618,22 @@ function drawNorns() {
 
 const reduceMotion = !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches);
 function stageItems() {
-  return G.geometry().map((d) => ({ ...d, group: d.layer ? 2 - (d.layer.serial % 2) : d.id, dim: d.layer ? 0.55 : 0, scale: d.layer ? 0.8 : 1, size: d.layer ? undefined : d.plant.userScale ?? 1 }));
+  const forest = G.plants.length > 2;
+  return G.geometry().map((d) => {
+    // forest plants 3..16 stand at a seeded depth: smaller and dimmer further back
+    const depth = forest && !d.layer && d.id > 2 ? 0.2 + 0.8 * (hashSeed(S.seed, d.id + 900) / 4294967296) : 0;
+    return { ...d, depth, group: d.layer ? 2 - (d.layer.serial % 2) : d.id, dim: d.layer ? 0.55 : depth * 0.6, scale: d.layer ? 0.8 : 1, size: d.layer ? undefined : d.plant.userScale ?? 1 };
+  });
 }
 function drawWall(t) {
   const W = canvas.width, H = canvas.height;
   if (S.playing && !reduceMotion) stage.swayT += Math.min(100, Math.max(0, t - (S.swayLast ?? t)));
   S.swayLast = t;
   stage.swayAmp = reduceMotion ? 0 : (S.sway ?? 0.012);
-  stage.update(stageItems(), t);
+  const forest = G.plants.length > 2, compact = H > W;
+  stage.groundAll = forest;
+  stage.arrangeKey = forest ? `forest|${S.seed}|${compact ? S.active : ""}` : "";
+  stage.update(stageItems(), t, forest ? (it, w, h) => arrangeForest(it, w, h, { seed: S.seed, active: S.active, compact }) : undefined);
   stage.draw(S.active, lit);
   const lw = stage.lineWidth();
   if (S.flags.shanshui && S.flood > 0) {
@@ -600,7 +652,7 @@ function drawWall(t) {
     ctx.fillRect(0, 0, W, H);
   }
 }
-on("note", (n) => { if (n.arp) S.lastArpAt = performance.now(); else if (n.idx > 0) stage.addMark(n.plant, n.idx); });
+on("note", (n) => { if (n.arp) S.lastArpAt = performance.now(); else if (n.idx) stage.addMark(n.plant, n.idx); });
 
 function decay(dt) {
   const f = Math.exp(-dt / 0.45);

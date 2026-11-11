@@ -10,10 +10,51 @@
 // Beat time throughout. A bar is 4 beats; a loop is LOOP_BARS bars.
 
 import { Plant, Sequencer, makeRandom, mtof, ftom, checkPlantPosition } from "./lsys.js";
+import { growRoots, ROOT_DEFAULT, BASS_DEFAULT, BASS_SYNCS, bassStep, ARCHETYPES } from "./roots.js";
 
+const num = (v, lo, hi, d) => { const n = Number(v); return v !== null && v !== undefined && v !== "" && Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : d; };
 export const LOOP_BARS = 4;
 export const LOOP_BEATS = LOOP_BARS * 4;
 export const MAX_LAYERS = 4;
+export const MAX_FOREST = 16;
+export const LAYER_ID0 = 101;     // loop layer ids start here; plant ids are 1..16
+// seeded 32-bit hash, so forest plants never draw from the base plants' stream
+export const hashSeed = (seed, i) => {
+  let t = (Math.imul(seed | 0, 0x9e3779b1) ^ Math.imul(i + 1, 0x85ebca6b)) >>> 0;
+  t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return (t ^ (t >>> 14)) >>> 0;
+};
+const h01 = (seed, i) => hashSeed(seed, i) / 4294967296;
+
+// user plants: flora's alphabet only (the symbols the catalog and the turtle use), no new symbols
+export const PLANT_ALPHABET = "FGf+-[]!|rABMOPTXYp";
+const balanced = (s) => { let n = 0; for (const c of s) { if (c === "[") n++; else if (c === "]" && --n < 0) return false; } return n === 0; };
+export function validatePlant(d) {
+  const errors = [];
+  const inAlpha = (s) => [...s].every((c) => PLANT_ALPHABET.includes(c));
+  const axiom = String(d?.axiom ?? "").trim();
+  if (!axiom) errors.push("axiom empty");
+  else if (axiom.length > 40) errors.push("axiom over 40");
+  else if (!inAlpha(axiom)) errors.push("axiom: only " + PLANT_ALPHABET);
+  else if (!balanced(axiom)) errors.push("axiom brackets");
+  const raw = Array.isArray(d?.rules) ? d.rules : [];
+  if (raw.length > 5) errors.push("at most 5 rules");
+  const rules = [];
+  raw.slice(0, 5).forEach((r, i) => {
+    const a = String(r?.[0] ?? "").trim(), b = String(r?.[1] ?? "").trim();
+    if (!a && !b) return;
+    if (a.length !== 1 || !PLANT_ALPHABET.includes(a) || "[]+-!|".includes(a)) errors.push(`rule ${i + 1}: one letter`);
+    else if (b.length > 80) errors.push(`rule ${i + 1} over 80`);
+    else if (!inAlpha(b)) errors.push(`rule ${i + 1}: only ` + PLANT_ALPHABET);
+    else if (!balanced(b)) errors.push(`rule ${i + 1} brackets`);
+    else rules.push([a, b]);
+  });
+  const def = { axiom, rules, angle: num(d?.angle, -180, 180, 25), length: num(d?.length, 2, 40, 10), start: Math.round(num(d?.start, 0, 6, 2)) };
+  return { ok: !errors.length, errors, def };
+}
+// a user plant in the catalog's shape
+export const plantEntry = (def) => ({ id: "u", start_from: [63.5, 60], ruleset: def.rules, axiom: def.axiom, max_generations: Math.max(def.start, 6), length: def.length, angle: def.angle, initial_turtle_rotation: 90, starting_generation: def.start });
+export const CUSTOM0 = 1000;      // instr above this is a user plant
 
 // musicutil scale intervals (one octave), the subset the key menu offers
 export const SCALES = {
@@ -47,7 +88,6 @@ const ARP_DEFAULT = () => ({ mode: "off", rate: "1/8", octaves: 1, size: 4, gate
 const ARP_SEEDS = { saw: 0x9e37, rain: 0x7f4a };
 const newArp = (seed) => ({ ...ARP_DEFAULT(), buf: [], ix: 0, nextT: null, pos: 0, random: makeRandom(seed) });
 export const SETUP_VERSION = 1;
-const num = (v, lo, hi, d) => { const n = Number(v); return v !== null && v !== undefined && Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : d; };
 const voiceId = (v) => (typeof v === "string" && /^[a-z0-9_-]{1,24}$/.test(v) ? v : null);
 export const DELAY_DEFAULT = () => ({ amount: 0, div: "d1/8", feedback: 0.45, lowpass: 2400, pingpong: false });
 // Euclidean rhythm: is step i of `steps` a pulse, with `pulses` spread evenly and a rotation
@@ -94,6 +134,13 @@ export class Garden {
     this.flourish = 0;         // 0..1: the other voice answers a plant note with a quick rising run
     this.flourishRandom = makeRandom(0x51f3);
     this.future = [];          // notes already decided, due later (flourish runs)
+    this.forest = { n: 2, leads: 2, density: 0.6, budget: 6 };
+    this.roots = {};           // plant id -> {archetype, depth, spread, density}
+    this.bass = BASS_DEFAULT();
+    this.customs = [];         // user plant definitions; instr CUSTOM0 + 1 + index
+    this.bassWalk = 0; this.bassCount = 0; this.nextBassT = null;
+    this.sounding = [];        // conductor: beat at which each admitted note ends
+    this._cBar = null; this._roles = new Map(); this._slots = new Map(); this._placed = new Set();
     this.layers = [];
     this.active = 1;
     this.playing = true;
@@ -115,17 +162,68 @@ export class Garden {
     this.plants.splice(0, this.plants.length, new Plant(1, { random: this.random, defaults: this.D }), new Plant(2, { random: this.random, defaults: this.D }));
     this.seqs = [null, null];
     this.pending = [null, null];
+    this.prand = [this.random, this.random];
     this.t0 = this.t0 ?? 0;
     for (let k = 0; k < 2; k++) this.setup(k, this.instr[k]);
+    // forest plants 3..n: each its own stream from the seed, so plants 1 and 2 play as in v0.2.0
+    this._growForest(this.forest.n, instr);
     this._clearArps();
     return this.seedValue;
+  }
+  _growForest(n, instr) {
+    n = Math.max(2, Math.min(MAX_FOREST, Math.round(n)));
+    this.forest.n = n;
+    while (this.plants.length > n) {
+      const id = this.plants.length;
+      this.plants.pop(); this.instr.pop(); this.seqs.pop(); this.pending.pop(); this.prand.pop();
+      delete this.roots[id]; delete this.routes[id];
+    }
+    for (let k = this.plants.length; k < n; k++) {
+      const rr = makeRandom(hashSeed(this.seedValue, k) || 1);
+      this.prand[k] = rr;
+      this.plants.push(new Plant(k + 1, { random: rr, defaults: this.D }));
+      this.seqs[k] = null; this.pending[k] = null;
+      this.setup(k, instr?.[k] || presetOfSeed(hashSeed(this.seedValue, k + 100), this.N));
+    }
+    if (this.active > n) this.active = 1;
+    this.sounding = []; this._cBar = null;
+  }
+  _rnd(k) { return this.prand?.[k] || this.random; }
+  _def(instr) { return instr > CUSTOM0 ? plantEntry(this.customs[instr - CUSTOM0 - 1]) : this.catalog.plants[instr - 1]; }
+  // a user plant: registered once per definition; returns its instr number
+  addCustom(def) {
+    const v = validatePlant(def);
+    if (!v.ok) throw new Error(v.errors.join(", "));
+    const key = JSON.stringify(v.def);
+    let i = this.customs.findIndex((c) => JSON.stringify(c) === key);
+    if (i < 0) { this.customs.push(v.def); i = this.customs.length - 1; }
+    return CUSTOM0 + 1 + i;
+  }
+  get conducting() { return this.plants.length > 2; }
+  setForest(o) {
+    const f = this.forest;
+    f.leads = Math.round(num(o.leads, 1, 4, f.leads)); f.density = num(o.density, 0, 1, f.density); f.budget = Math.round(num(o.budget, 1, 16, f.budget));
+    if (o.n !== undefined && Math.round(o.n) !== this.plants.length) this._growForest(o.n);
+  }
+  setRoots(id, o) {
+    const R = { ...(this.roots[id] || ROOT_DEFAULT()), ...o };
+    R.archetype = ARCHETYPES.includes(R.archetype) ? R.archetype : null;
+    for (const k of ["depth", "spread", "density"]) R[k] = num(R[k], 0, 1, 0.5);
+    this.roots[id] = R;
+    this.nextBassT = null;
+  }
+  setBass(o) {
+    const b = this.bass, d = BASS_DEFAULT();
+    b.octave = Math.round(num(o.octave, -3, 1, b.octave ?? d.octave)); b.level = num(o.level, 0, 1, b.level); b.decay = num(o.decay, 0.05, 2, b.decay);
+    b.release = num(o.release, 0.05, 4, b.release); b.detune = num(o.detune, 0, 50, b.detune); b.drone = num(o.drone, 0, 1, b.drone);
+    if (o.sync !== undefined && BASS_SYNCS.includes(Number(o.sync))) { b.sync = Number(o.sync); this.nextBassT = null; }
   }
   setup(k, instr, gen) {
     this.instr[k] = instr;
     const p = this.plants[k];
     p.resetOffset();
-    p.setup(this.catalog.plants[instr - 1], instr, gen);
-    this.seqs[k] = this._seq(p, this.random, this._now ?? 0);
+    p.setup(this._def(instr), instr, gen);
+    this.seqs[k] = this._seq(p, this._rnd(k), this._now ?? 0);
     this.pending[k] = null;
     this.onGen?.({ plant: k + 1, gen: p.currentGeneration, max: p.maxGenerations, instr, sim: true });
   }
@@ -141,11 +239,12 @@ export class Garden {
     this.setup(k, this.instr[k]);
     return false;
   }
-  reset() { for (let k = 0; k < 2; k++) this.setup(k, this.instr[k]); }
+  reset() { for (let k = 0; k < this.plants.length; k++) this.setup(k, this.instr[k]); }
   preset(dir, k = this.active - 1) { this.setup(k, ((this.instr[k] - 1 + dir + this.N) % this.N) + 1); }
   play(v) {
     this.playing = v;
-    if (v) for (let k = 0; k < 2; k++) { this.seqs[k] = this._seq(this.plants[k], this.random, this._now ?? 0); this.pending[k] = null; }
+    if (v) for (let k = 0; k < this.plants.length; k++) { this.seqs[k] = this._seq(this.plants[k], this._rnd(k), this._now ?? 0); this.pending[k] = null; }
+    this.sounding = [];
   }
   simParams(o) {
     this.simOpts = { ...this.simOpts, ...o };
@@ -199,7 +298,7 @@ export class Garden {
   addLayer(seed, now = this._now ?? 0) {
     seed = seed >>> 0 || 1;
     const random = makeRandom(seed);
-    const id = 3 + ((this._layerSerial = (this._layerSerial || 0) + 1) % 1000);
+    const id = LAYER_ID0 + ((this._layerSerial = (this._layerSerial || 0) + 1) % 1000);
     const plant = new Plant(id, { random, defaults: this.D });
     const instr = presetOfSeed(seed, this.N);
     plant.setup(this.catalog.plants[instr - 1], instr);
@@ -228,8 +327,8 @@ export class Garden {
     this._now = now;
     const out = [];
     if (!this.playing) return out;
-    // base plants (flora's clock.sync walk)
-    for (let k = 0; k < 2; k++) {
+    // base plants (flora's clock.sync walk), then the forest
+    for (let k = 0; k < this.plants.length; k++) {
       const seq = this.seqs[k];
       if (!seq) continue;
       for (let guard = 0; guard < 4000; guard++) {
@@ -281,13 +380,27 @@ export class Garden {
         const hit = euclidHit(A.pos++, A.steps, A.pulses, A.rotation);
         if (!hit || now - t > 1) continue;
         const ev = this._arpNote(engine, A, t, q);
-        if (ev) out.push(ev);
+        if (ev && this._admit(ev)) out.push(ev);
       }
     }
-    // notes decided earlier and due now
+    // the bass in free time: one note every 2 beats while a plant has roots
+    if (this.bass.sync === 0 && this._bassPlant()) {
+      if (this.nextBassT === null) this.nextBassT = Math.ceil(now / 2) * 2;
+      for (let guard = 0; guard < 16 && this.nextBassT <= now; guard++) {
+        const t = this.nextBassT; this.nextBassT += 2;
+        if (now - t > 1) continue;
+        const b = this._bassNote(t, 1.5);
+        if (b && this._admit(b)) { this.log.push(b); out.push(b); }
+      }
+    }
+    // notes decided earlier and due now (flourish runs, chorus notes, bass on the canopy count)
     if (this.future.length) {
       this.future.sort((a, b) => a.t - b.t);
-      while (this.future.length && this.future[0].t <= now) { const ev = this.future.shift(); if (now - ev.t <= 1) { this.log.push(ev); out.push(ev); } }
+      while (this.future.length && this.future[0].t <= now) {
+        const ev = this.future.shift();
+        if (now - ev.t > 1 || !this._admit(ev)) continue;
+        this.log.push(ev); out.push(ev);
+      }
     }
     return out;
   }
@@ -304,10 +417,107 @@ export class Garden {
       A.buf.push(si);
       while (A.buf.length > A.size) A.buf.shift();
     }
+    if (this.conducting) this._conductNote(ev);
     this.log.push(ev);
     if (this.log.length > 5000) this.log.splice(0, 1000);
-    if (this.flourish > 0 && !ev.layer) this._flourish(ev);
+    if (this.flourish > 0 && !ev.layer && !ev.silent) this._flourish(ev);
+    // the bass counts the canopy steps of the plant whose roots it walks
+    if (!ev.layer && this.bass.sync > 0 && ev.plant === this._bassPlant() && ++this.bassCount % this.bass.sync === 0) {
+      const b = this._bassNote(ev.t, 1.5);
+      if (b) this.future.push(b);
+    }
     return ev;
+  }
+
+  // ---- conductor (forest only) ------------------------------------------------
+  // per bar: `leads` plants play every note, the rest are a chorus that may each place one note on a
+  // shared eighth-note grid (round robin, seeded, `density` the chance). Over the budget a note is
+  // dropped, never stolen. A dropped note still lights its segment.
+  _conduct(bar) {
+    this._cBar = bar; this._placed.clear(); this._roles.clear(); this._slots.clear();
+    const n = this.plants.length, ids = [];
+    for (let k = 0; k < n; k++) ids.push(k + 1);
+    const rot = ((bar % n) + n) % n;
+    const order = ids.slice(rot).concat(ids.slice(0, rot)).filter((id) => id !== this.active);
+    const leads = [this.active, ...order].slice(0, this.forest.leads);
+    let j = 0;
+    for (const id of ids) {
+      const lead = leads.includes(id);
+      this._roles.set(id, lead ? "lead" : "chorus");
+      if (!lead && h01(this.seedValue, bar * 64 + id) < this.forest.density) this._slots.set(id, (j++ + bar) % 8);
+    }
+  }
+  _conductNote(ev) {
+    if (ev.engine === "rain") ev.maxLen = 3;   // a rain note's length must be known to count it
+    ev.voiceKey = ev.plant * 128 + ev.note;    // its own voice, so no plant steals another's
+    if (ev.layer) { if (!this._admit(ev)) ev.silent = true; return; }
+    const bar = Math.floor(ev.t / 4);
+    if (bar !== this._cBar) this._conduct(bar);
+    if (this._roles.get(ev.plant) === "lead") { if (!this._admit(ev)) ev.silent = true; return; }
+    ev.silent = true;
+    const slot = this._slots.get(ev.plant);
+    if (slot === undefined || this._placed.has(ev.plant)) return;
+    this._placed.add(ev.plant);
+    const tq = Math.max(bar * 4 + slot * 0.5, Math.ceil(ev.t * 2) / 2);
+    if (tq < (bar + 1) * 4) this.future.push({ ...ev, silent: false, chorus: true, idx: 0, t: tq });
+  }
+  // seconds a note will sound, never less than the voice really sounds
+  _lenOf(ev) {
+    const spb = 60 / this.bpm;
+    if (ev.bass) return ev.dur * spb + this.bass.release + 0.05;
+    if (ev.arp || ev.flourish) {
+      if (ev.engine === "rain") return Math.max(0.06, ev.dur * spb * (ev.gate ?? 1) * 1.5) * 1.2 + 0.06;
+      return 1.5 * Math.max(0.12, Math.min(1, (ev.dur * spb) / 1.2)) * (ev.gate ?? 1) + 0.05;
+    }
+    if (ev.engine === "rain") return (ev.maxLen ?? 8) * 1.2 + 0.06;
+    return 1.55;
+  }
+  _admit(ev) {
+    if (!this.conducting) return true;
+    const t = ev.t;
+    this.sounding = this.sounding.filter((e) => e > t);
+    // one place is kept for the bass line while a plant has roots
+    const cap = this.forest.budget - (ev.bass || !this._bassPlant() ? 0 : 1);
+    if (this.sounding.length >= Math.max(1, cap)) return false;
+    this.sounding.push(t + (this._lenOf(ev) + 0.06) * (this.bpm / 60));
+    return true;
+  }
+
+  // ---- roots and the bass ------------------------------------------------------
+  // one bass line: the active plant's roots, else a lead's, else the first plant with roots
+  _bassPlant() {
+    const has = (id) => !!this.roots[id]?.archetype && id <= this.plants.length;
+    if (has(this.active)) return this.active;
+    for (let id = 1; id <= this.plants.length; id++) if (has(id) && (!this.conducting || this._roles.get(id) === "lead")) return id;
+    for (let id = 1; id <= this.plants.length; id++) if (has(id)) return id;
+    return 0;
+  }
+  _bassNote(t, dur) {
+    const id = this._bassPlant(), R = id && this.rootsOf(id - 1);
+    if (!R || !R.tips.length) return null;
+    const b = bassStep(this.bassWalk++, R, this.key, SCALES[this.key.scale] || SCALES.dorian, this.bass.octave);
+    const note = b.note + this.pitch;
+    const wide = this.roots[id].archetype === "rhizome" ? 1 : 0.6;
+    return { plant: id, bass: true, engine: "bass", idx: -(b.tip + 1), note, freq: mtof(note), pan: b.pan * wide, x: -1, y: -1, dur, t, gate: 1, scaleIndex: undefined };
+  }
+  // the drone: the scale root an octave under the bass, while any plant has roots and the garden plays
+  droneHz() {
+    if (!this.playing || !this._bassPlant()) return 0;
+    return mtof(this.key.root + 12 * (this.bass.octave - 1) + this.pitch);
+  }
+  // the root system of plant k, in its plant coordinates, cached
+  rootsOf(k) {
+    const id = k + 1, R = this.roots[id], plant = this.plants[k];
+    if (!R?.archetype || !plant?.turtle || !plant.lsys) return null;
+    const g = this._geomOf(id, plant), b = g.box;
+    const h = b ? Math.max(12, b.y1 - b.y0, (b.x1 - b.x0) * 0.6) : 20;
+    const foot = { x: plant.startFrom.x + plant.offset.x, y: plant.startFrom.y + plant.offset.y };
+    const key = `${R.archetype}|${R.depth}|${R.spread}|${R.density}|${h.toFixed(3)}|${foot.x}|${foot.y}|${this.seedValue}`;
+    this._roots = this._roots || new Map();
+    let c = this._roots.get(id);
+    if (!c || c.key !== key) { c = { key, roots: growRoots(R, foot, h, hashSeed(this.seedValue, id + 500)), rev: ++this._rev }; this._roots.set(id, c); }
+    c.roots.rev = c.rev;
+    return c.roots;
   }
   _arpNote(engine, A, t, q) {
     const chord = A.buf.slice().sort((a, b) => a - b);
@@ -365,6 +575,21 @@ export class Garden {
   // No checkPlantPosition here: the stage fits the plants itself. The draw uses
   // its own fixed random stream and leaves the turtle as it found it, so two
   // calls on one sentence give one drawing and never advance the garden's RNG.
+  _geomOf(id, plant) {
+    this._geom = this._geom || new Map();
+    this._rev = this._rev || 0;
+    const t = plant.turtle;
+    const key = `${plant.lsys.sentence}|${t.todo === plant.lsys.sentence}|${t.theta}|${t.length}|${plant.initialTurtleRotation}|${plant.startFrom.x},${plant.startFrom.y}`;
+    let c = this._geom.get(id);
+    if (!c || c.key !== key) {
+      const geom = this._still(plant, id);
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const q of geom.segments) { x0 = Math.min(x0, q.x1, q.x2); x1 = Math.max(x1, q.x1, q.x2); y0 = Math.min(y0, q.y1, q.y2); y1 = Math.max(y1, q.y1, q.y2); }
+      c = { key, geom, rev: ++this._rev, box: x0 === Infinity ? null : { x0, y0, x1, y1 } };
+      this._geom.set(id, c);
+    }
+    return c;
+  }
   geometry() {
     this._geom = this._geom || new Map();
     this._rev = this._rev || 0;
@@ -372,11 +597,9 @@ export class Garden {
     const each = (id, plant, layer) => {
       if (!plant.turtle || !plant.lsys) return;
       seen.add(id);
-      const t = plant.turtle;
-      const key = `${plant.lsys.sentence}|${t.todo === plant.lsys.sentence}|${t.theta}|${t.length}|${plant.initialTurtleRotation}`;
-      let c = this._geom.get(id);
-      if (!c || c.key !== key) { c = { key, geom: this._still(plant, id), rev: ++this._rev }; this._geom.set(id, c); }
-      out.push({ id, plant, layer, geom: c.geom, rev: c.rev });
+      const c = this._geomOf(id, plant);
+      const roots = layer ? null : this.rootsOf(id - 1);
+      out.push({ id, plant, layer, geom: c.geom, rev: roots ? `${c.rev}.${roots.rev}` : c.rev, roots });
     };
     for (let k = 0; k < this.plants.length; k++) each(k + 1, this.plants[k]);
     for (const L of this.layers) each(L.id, L.plant, L);
@@ -399,7 +622,8 @@ export class Garden {
     return {
       v: SETUP_VERSION, seed: this.seedValue, rng: this.random.state(), bpm: this.bpm, active: this.active,
       key: { ...this.key }, pitch: this.pitch, growth: this.growth, engineMode: this.engineMode, layerRoute: this.layerRoute, flourish: this.flourish,
-      plants: this.plants.map((p, k) => ({ instr: this.instr[k], gen: p.currentGeneration, lgen: p.lsys.generation, sentence: p.sentence, randomAngles: p.lsys.randomAngles.slice(), angle: p.angle, length: p.userScale ?? 1, engine: this.routes[k + 1] ?? null })),
+      plants: this.plants.map((p, k) => ({ instr: this.instr[k], custom: this.instr[k] > CUSTOM0 ? { ...this.customs[this.instr[k] - CUSTOM0 - 1] } : undefined, gen: p.currentGeneration, lgen: p.lsys.generation, sentence: p.sentence, randomAngles: p.lsys.randomAngles.slice(), angle: p.angle, length: p.userScale ?? 1, engine: this.routes[k + 1] ?? null, roots: this.roots[k + 1]?.archetype ? { ...this.roots[k + 1] } : null, rng: k >= 2 ? this.prand[k].state() : undefined })),
+      forest: { leads: this.forest.leads, density: this.forest.density, budget: this.forest.budget }, bass: { ...this.bass },
       layers: this.layers.map((L) => ({ seed: L.seed, serial: L.serial, phase: L.start % LOOP_BEATS, engine: this.routes[L.id] ?? null })),
       layerSerial: this._layerSerial || 0,
       arps: { saw: arp(this.arps.saw), rain: arp(this.arps.rain) },
@@ -411,10 +635,13 @@ export class Garden {
   _cleanSetup(s) {
     if (!s || typeof s !== "object" || s.v !== SETUP_VERSION) throw new Error("not a sonar setup");
     if (!Array.isArray(s.plants) || s.plants.length < 2) throw new Error("setup has no plants");
-    const plants = s.plants.slice(0, 2).map((p) => {
-      const instr = Math.round(Number(p?.instr));
-      if (!(instr >= 1 && instr <= this.N)) throw new Error("setup names an unknown plant");
+    const plants = s.plants.slice(0, MAX_FOREST).map((p) => {
+      let instr = Math.round(Number(p?.instr)), custom;
+      if (p?.custom) { const v = validatePlant(p.custom); if (!v.ok) throw new Error("setup has a plant outside flora's alphabet"); custom = v.def; instr = CUSTOM0 + 1; }
+      else if (!(instr >= 1 && instr <= this.N)) throw new Error("setup names an unknown plant");
+      const R = p?.roots && ARCHETYPES.includes(p.roots.archetype) ? { archetype: p.roots.archetype, depth: num(p.roots.depth, 0, 1, 0.6), spread: num(p.roots.spread, 0, 1, 0.5), density: num(p.roots.density, 0, 1, 0.5) } : null;
       return {
+        custom, roots: R, rng: num(p?.rng, 0, 4294967295, undefined),
         instr, gen: num(p.gen, 0, 64, undefined), lgen: num(p.lgen, -64, 64, undefined),
         sentence: typeof p.sentence === "string" && p.sentence.length <= 20000 ? p.sentence : undefined,
         randomAngles: Array.isArray(p.randomAngles) ? p.randomAngles.slice(0, 4000).map((x) => num(x, -360, 360, 0)) : [],
@@ -426,12 +653,14 @@ export class Garden {
     const sim = {};
     for (const k of ["duration", "cfScalar"]) { const v = num(s.sim?.[k], 0, 1e6, undefined); if (v !== undefined) sim[k] = v; }
     return {
-      seed: num(s.seed, 1, 4294967295, 1), rng: num(s.rng, 0, 4294967295, undefined), bpm: Math.round(num(s.bpm, 20, 300, 90)), active: s.active === 2 ? 2 : 1,
+      seed: num(s.seed, 1, 4294967295, 1), rng: num(s.rng, 0, 4294967295, undefined), bpm: Math.round(num(s.bpm, 20, 300, 90)), active: Math.round(num(s.active, 1, MAX_FOREST, 1)),
       root: Math.round(num(s.key?.root, 0, 127, this.D.root_note)), scale: SCALES[s.key?.scale] ? s.key.scale : this.D.scale_name || "dorian",
       pitch: num(s.pitch, -24, 24, 0), growth: num(s.growth, 0, 16, 0), engineMode: ["saw", "rain", "both"].includes(s.engineMode) ? s.engineMode : "saw",
       layerRoute: voiceId(s.layerRoute), flourish: num(s.flourish, 0, 1, 0), plants, layers, layerSerial: num(s.layerSerial, 0, 1e6, undefined),
       arps: { saw: s.arps?.saw || {}, rain: s.arps?.rain || {} }, delays: { saw: delay(s.delays?.saw), rain: delay(s.delays?.rain) }, sim,
       midi: typeof s.midi === "string" ? s.midi.slice(0, 80) : null,
+      forest: { leads: Math.round(num(s.forest?.leads, 1, 4, 2)), density: num(s.forest?.density, 0, 1, 0.6), budget: Math.round(num(s.forest?.budget, 1, 16, 6)) },
+      bass: s.bass && typeof s.bass === "object" ? s.bass : {},
     };
   }
   // load a setup from beat `now`; loop layers keep their place on the 4 bar grid
@@ -439,11 +668,17 @@ export class Garden {
     const s = this._cleanSetup(raw);
     this._now = now;
     this.layers = []; this.future = []; this.routes = {};
-    this.bpm = s.bpm; this.active = s.active; this.midiRef = s.midi;
+    this.bpm = s.bpm; this.active = Math.min(s.active, s.plants.length); this.midiRef = s.midi;
     this.key = { root: s.root, scale: s.scale };
     this.notes = scaleOfLength(s.root, s.scale, this.D.scale_length || 24);
     this.simOpts = s.sim;
-    this.seed(s.seed, s.plants.map((p) => p.instr));
+    this.customs = [];
+    const instrs = s.plants.map((p) => (p.custom ? this.addCustom(p.custom) : p.instr));
+    this.roots = {};
+    Object.assign(this.forest, s.forest, { n: s.plants.length });
+    this.bass = BASS_DEFAULT(); this.setBass(s.bass);
+    this.bassWalk = 0; this.bassCount = 0; this.nextBassT = null; this.sounding = []; this._cBar = null;
+    this.seed(s.seed, instrs);
     s.plants.forEach((p, k) => {
       const plant = this.plants[k];
       if (p.sentence !== undefined) {
@@ -451,11 +686,13 @@ export class Garden {
         plant.lsys.randomAngles = p.randomAngles;
         plant.lsys.generation = p.lgen ?? p.gen ?? 0;
         plant.currentGeneration = p.gen ?? 0;
-      } else if (p.gen) this.setup(k, p.instr, p.gen);
+      } else if (p.gen) this.setup(k, instrs[k], p.gen);
       if (p.angle !== undefined) plant.setAngle(p.angle);
       plant.userScale = p.length;
       if (p.engine) this.routes[k + 1] = p.engine;
-      this.seqs[k] = this._seq(plant, this.random, now);
+      if (p.roots) this.roots[k + 1] = { ...p.roots };
+      if (k >= 2 && p.rng !== undefined) this.prand[k].restore(p.rng);
+      this.seqs[k] = this._seq(plant, this._rnd(k), now);
       this.pending[k] = null;
     });
     this.pitch = s.pitch; this.growthDir = 1; this.setGrowth(s.growth);

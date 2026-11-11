@@ -27,12 +27,14 @@ export async function enable({ S, on, act }) {
     C.setMaster(S.master);
     C.setDelays(G.delays);
     C.setBpm(S.bpm);
+    C.setBass(G.bass);
+    C.setDrone(muted() ? 0 : G.droneHz(), G.bass.drone);
     if (S.panic) C.allOff();
   });
 
   const liveAudio = q.get("liveaudio") === "1";
   on("note", (n) => {
-    if (muted()) return;
+    if (muted() || n.silent) return;
     if (S.source.startsWith("live") && !liveAudio) return;
     C.playNote(n, S.bpm, ctx.currentTime + 0.02);
   });

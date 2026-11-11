@@ -21,6 +21,15 @@ export function bboxOf(geom) {
   }
   return x0 === Infinity ? null : { x0, y0, x1, y1 };
 }
+// the plant with its roots: what the camera must hold
+export function boxFor(it) {
+  const b = bboxOf(it.geom);
+  if (!it.roots || !b) return b;
+  const r = bboxOf(it.roots);
+  return r ? { x0: Math.min(b.x0, r.x0), y0: Math.min(b.y0, r.y0), x1: Math.max(b.x1, r.x1), y1: Math.max(b.y1, r.y1) } : b;
+}
+// where the ground is for a plant: its roots' ground line, else the foot of its drawing
+const footOf = (it, b) => (it.roots ? it.roots.ground : b ? b.y1 : 0);
 
 // seeded hash to 0..1, for forest spacing and depth
 export const hash01 = (seed, i) => {
@@ -39,7 +48,7 @@ export function arrange(items, W, H) {
   const aspect = W / H;
   const groups = new Map();
   for (const it of items) {
-    const b = bboxOf(it.geom);
+    const b = boxFor(it);
     if (!b) continue;
     if (!groups.has(it.group)) groups.set(it.group, []);
     groups.get(it.group).push({ it, b, bw: b.x1 - b.x0, bh: b.y1 - b.y0 });
@@ -75,6 +84,57 @@ export function arrange(items, W, H) {
     const k = s * m.gk * m.ki;
     const sx = ox + s * m.cx, sy = oy + s * m.cy;
     out.set(m.it.id, { k, tx: sx - (k * (m.b.x0 + m.b.x1)) / 2, ty: sy - (k * (m.b.y0 + m.b.y1)) / 2 });
+  }
+  return { fit: s, map: out };
+}
+
+// the forest: one row, every foot on one ground line, back plants (depth near 1) smaller.
+// Spacing and depth come from the seed. compact: the row runs past the screen and pans so the
+// active plant sits in the middle.
+export function arrangeForest(items, W, H, o = {}) {
+  const groups = new Map();
+  for (const it of items) {
+    const b = boxFor(it);
+    if (!b) continue;
+    if (!groups.has(it.group)) groups.set(it.group, []);
+    groups.get(it.group).push({ it, b, foot: footOf(it, bboxOf(it.geom)) });
+  }
+  const keys = [...groups.keys()].sort((a, b) => a - b);
+  const placed = [], centre = new Map();
+  let cursor = 0, ux0 = Infinity, ux1 = -Infinity, uy0 = Infinity, uy1 = -Infinity;
+  for (const key of keys) {
+    const list = groups.get(key), lead = list[0];
+    const depth = lead.it.depth ?? 0;
+    const h = (1 - 0.38 * depth) * (lead.it.size ?? 1);
+    const k0 = h / Math.max(lead.b.y1 - lead.b.y0, lead.b.x1 - lead.b.x0, 1e-6);
+    let gx0 = Infinity, gx1 = -Infinity;
+    for (const m of list) { m.kn = k0 * (m.it.scale ?? 1); gx0 = Math.min(gx0, (m.b.x0 - lead.b.x0) * m.kn); gx1 = Math.max(gx1, (m.b.x1 - lead.b.x0) * m.kn); }
+    const w = gx1 - gx0, cx = cursor + w / 2;
+    centre.set(key, cx);
+    cursor += w + 0.04 + 0.16 * hash01(o.seed ?? 1, key);
+    for (const m of list) {
+      const bcx = (m.b.x0 + m.b.x1) / 2;
+      placed.push({ ...m, cx, bcx });
+      ux0 = Math.min(ux0, cx + (m.b.x0 - bcx) * m.kn); ux1 = Math.max(ux1, cx + (m.b.x1 - bcx) * m.kn);
+      uy0 = Math.min(uy0, (m.b.y0 - m.foot) * m.kn); uy1 = Math.max(uy1, (m.b.y1 - m.foot) * m.kn);
+    }
+  }
+  const out = new Map();
+  if (!placed.length) return { fit: 1, map: out };
+  const uw = Math.max(ux1 - ux0, 1e-6), uh = Math.max(uy1 - uy0, 1e-6);
+  const sH = (H * (1 - 2 * MARGIN)) / uh, sAll = Math.min((W * (1 - 2 * MARGIN)) / uw, sH);
+  // a phone in portrait would make 16 plants tiny: keep a readable height and pan instead
+  const s = o.compact ? Math.min(sH, Math.max(sAll, (W * (1 - 2 * MARGIN)) / Math.min(uw, 1.6))) : sAll;
+  let ox = W / 2 - s * (ux0 + ux1) / 2;
+  if (uw * s > W * (1 - 2 * MARGIN)) {
+    const ac = centre.get(o.active) ?? (ux0 + ux1) / 2;
+    ox = W / 2 - s * ac;
+    ox = Math.min(W * MARGIN - s * ux0, Math.max(W * (1 - MARGIN) - s * ux1, ox));
+  }
+  const oy = H / 2 - s * (uy0 + uy1) / 2;
+  for (const m of placed) {
+    const k = s * m.kn;
+    out.set(m.it.id, { k, tx: ox + s * m.cx - k * m.bcx, ty: oy - k * m.foot });
   }
   return { fit: s, map: out };
 }
@@ -157,8 +217,8 @@ export class Stage {
   }
   // local plant coordinates to device pixels, with the shear measured up from the plant's foot
   _proj(it, m) {
-    const sh = this._sway(it.id), b = bboxOf(it.geom), foot = b ? b.y1 : 0;
-    return { x: (x, y) => m.tx + m.k * (x + sh * (foot - y)), y: (y) => m.ty + m.k * y };
+    const sh = this._sway(it.id), foot = footOf(it, bboxOf(it.geom));
+    return { x: (x, y) => m.tx + m.k * (x + sh * Math.max(0, foot - y)), y: (y) => m.ty + m.k * y };
   }
   _drawBase(active) {
     const key = this.canvas.width + "x" + this.canvas.height + "|" + active + "|" + this.items.map((it) => {
@@ -183,6 +243,18 @@ export class Stage {
       const P = this._proj(it, m);
       for (const s of it.geom.segments) { c.moveTo(P.x(s.x1, s.y1), P.y(s.y1)); c.lineTo(P.x(s.x2, s.y2), P.y(s.y2)); }
       c.stroke();
+      if (it.roots) { // below the ground: dimmer and thinner than the canopy, and a thin ground rule
+        c.strokeStyle = on ? "rgba(46, 74, 140, 1)" : `rgba(62, 70, 107, ${(1 - dim * 0.6).toFixed(3)})`;
+        c.lineWidth = lw * (on ? 0.9 : 0.8 - dim * 0.3);
+        c.beginPath();
+        for (const s of it.roots.segments) { c.moveTo(P.x(s.x1, s.y1), P.y(s.y1)); c.lineTo(P.x(s.x2, s.y2), P.y(s.y2)); }
+        c.stroke();
+        const b = this.boxOf(it), gy = P.y(it.roots.ground), pad = lw * 8;
+        c.strokeStyle = "rgba(62, 70, 107, 0.9)"; c.lineWidth = Math.max(this.dpr * 0.75, lw * 0.4);
+        c.beginPath();
+        if (this.groundAll) { c.moveTo(0, gy); c.lineTo(W, gy); } else if (b) { c.moveTo(b.x0 - pad, gy); c.lineTo(b.x1 + pad, gy); }
+        c.stroke();
+      }
       if (on) { // the selection reads by weight and a thin frame, not by hue
         const b = this.boxOf(it), p = lw * 5;
         if (b) { c.strokeStyle = "#9FC8F0"; c.lineWidth = Math.max(this.dpr * 0.75, lw * 0.5); c.strokeRect(b.x0 - p, b.y0 - p, b.x1 - b.x0 + 2 * p, b.y1 - b.y0 + 2 * p); }
@@ -197,11 +269,16 @@ export class Stage {
     c.lineCap = "round";
     for (const it of this.items) {
       const L = lit.get(it.id);
-      if (!L || !L.size) continue;
+      if (!L || !L.size) { if (it.roots) this._cache(it); continue; }
       const m = this.now.get(it.id);
       if (!m) continue;
       let cache = this.segs.get(it.id);
-      if (!cache || cache.rev !== it.rev) { const byIdx = new Map(); for (const s of it.geom.segments) byIdx.set(s.i, s); cache = { rev: it.rev, byIdx }; this.segs.set(it.id, cache); }
+      if (!cache || cache.rev !== it.rev) {
+        const byIdx = new Map();
+        for (const s of it.geom.segments) byIdx.set(s.i, s);
+        if (it.roots) for (const s of it.roots.segments) if (s.i) byIdx.set(s.i, s); // root tips: negative ids
+        cache = { rev: it.rev, byIdx }; this.segs.set(it.id, cache);
+      }
       c.lineWidth = lw * 2.2;
       const P = this._proj(it, m);
       for (const [i, b] of L) {
@@ -216,6 +293,16 @@ export class Stage {
     }
     this._drawMarks();
   }
+  _cache(it) {
+    let cache = this.segs.get(it.id);
+    if (!cache || cache.rev !== it.rev) {
+      const byIdx = new Map();
+      for (const s of it.geom.segments) byIdx.set(s.i, s);
+      if (it.roots) for (const s of it.roots.segments) if (s.i) byIdx.set(s.i, s);
+      cache = { rev: it.rev, byIdx }; this.segs.set(it.id, cache);
+    }
+    return cache;
+  }
   // a ring grows from the end of each sounded segment and fades over 1.4 s
   _drawMarks() {
     const c = this.ctx, d = this.dpr;
@@ -224,7 +311,7 @@ export class Stage {
       const age = (this.t - mk.t) / 1400;
       if (age >= 1) continue;
       this.marks[keep++] = mk;
-      const it = this.items.find((x) => x.id === mk.id), m = it && this.now.get(mk.id), s = it && this.segs.get(mk.id)?.byIdx.get(mk.i);
+      const it = this.items.find((x) => x.id === mk.id), m = it && this.now.get(mk.id), s = it && this._cache(it).byIdx.get(mk.i);
       if (!s || !m) continue;
       const P = this._proj(it, m);
       c.strokeStyle = `rgba(159, 200, 240, ${(0.45 * (1 - age)).toFixed(3)})`;

@@ -115,7 +115,9 @@ test("t3 morph: a load waits for the bar line and glides bpm and delay over its 
     A.loadSetup(target, { bars: 1 });
     const seedAtOnce = G.seedValue;
     const seen = [];
-    for (let i = 0; i < 120 && (seen.length < 2 || S.bpm !== 120); i++) { await new Promise((f) => setTimeout(f, 25)); if (G.seedValue === 777) seen.push([S.bpm, G.delays.saw.amount]); }
+    // bounded by time, not by loop count: a loaded machine runs fewer timer turns per second
+    const until = performance.now() + 8000;
+    while (performance.now() < until && (seen.length < 2 || S.bpm !== 120)) { await new Promise((f) => setTimeout(f, 25)); if (G.seedValue === 777) seen.push([S.bpm, G.delays.saw.amount]); }
     return { seedAtOnce, seen, end: [S.bpm, G.delays.saw.amount, G.seedValue] };
   });
   expect(r.seedAtOnce).toBe(42);
