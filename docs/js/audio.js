@@ -12,9 +12,10 @@ export async function enable({ S, on, act }) {
   try { if (navigator.audioSession) { navigator.audioSession.type = "playback"; S.audioSession = navigator.audioSession.type; } } catch (e) { S.audioSession = "refused"; }
   const ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: "interactive" });
   await ctx.resume();
-  const C = createChain(ctx, { master: S.master ?? 0.7, bpm: S.bpm, engine: q.get("engine") || "saw" });
-  C.delay.setAmount(S.delay ?? 0);
-  const A = { ctx, chain: C, saw: C.saw, rain: C.rain, master: C.master, get engine() { return C.engine; }, set engine(v) { C.engine = v; }, get played() { return C.played; } };
+  const G = act.garden();
+  const C = createChain(ctx, { master: S.master ?? 0.7, bpm: S.bpm, delays: G.delays });
+  if (q.get("engine")) G.setEngineMode(q.get("engine"));
+  const A = { ctx, chain: C, saw: C.saw, rain: C.rain, master: C.master, get engine() { return G.engineMode; }, set engine(v) { G.setEngineMode(v); }, get played() { return C.played; } };
   S.audio = A;
 
   const setMaster = (v) => { S.master = Math.max(0, Math.min(1, v)); C.setMaster(S.master); const r = document.getElementById("r-master"); if (r) r.value = S.master; };
@@ -24,8 +25,8 @@ export async function enable({ S, on, act }) {
   on("state", () => {
     C.setMute(muted());
     C.setMaster(S.master);
-    C.delay.setAmount(S.delay ?? 0);
-    C.delay.setBpm(S.bpm);
+    C.setDelays(G.delays);
+    C.setBpm(S.bpm);
     if (S.panic) C.allOff();
   });
 
@@ -63,7 +64,7 @@ export async function enable({ S, on, act }) {
   };
   setInterval(meter, 250);
 
-  document.getElementById("b-engine").textContent = C.engine;
+  document.getElementById("b-engine").textContent = G.engineMode;
 
   await initMidi({ S, act, setMaster, getMaster });
   return A;

@@ -1,68 +1,171 @@
-// player.js · one audio chain for the page (audio.js) and the offline renders
-// (garden-offline.js): master -> mute -> delay send -> limiter -> out, the two
-// engine ports, and playNote() which turns a garden event into engine calls
-// the way flora's ps.play and raindrops' play() do.
+// player.js · one audio chain for the page (audio.js) and the offline renders (garden-offline.js).
+//
+//   voice bus -> mix -> master -> mute -> limiter -> soft clip -> out
+//   voice bus -> its own delay send -> wet -> mix
+//
+// Every voice implements {id, noteOn(ev, when), allOff(), params, set(), connect(send)}.
+// playNote() routes a garden event to the voice named in ev.engine.
 import { SawEngine } from "./engine-saw.js";
 import { RainEngine } from "./engine-rain.js";
 
 export const ENGINES = ["saw", "rain", "both"];
+export const DELAY_DIVS = { "1/16": 0.25, "1/8": 0.5, "d1/8": 0.75, "1/4": 1, "1/2": 2 };
+export const DELAY_DEFAULTS = { amount: 0, div: "d1/8", feedback: 0.45, lowpass: 2400, pingpong: false };
 
-// a tempo-synced feedback delay on a send: time = dotted eighth at bpm, feedback 0.45,
-// a 2.4 kHz low-pass in the loop so repeats sink into the fog
-export function createDelay(ctx, bpm = 90) {
+// a tempo-synced feedback delay on a send, with a low-pass in the loop so repeats sink into the fog
+export function createDelay(ctx, bpm = 90, init = {}) {
   const send = ctx.createGain(); send.gain.value = 0;
-  const delay = ctx.createDelay(4);
-  const fb = ctx.createGain(); fb.gain.value = 0.45;
-  const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 2400;
   const wet = ctx.createGain(); wet.gain.value = 1;
-  send.connect(delay).connect(lp).connect(wet);
+  // straight path
+  const straight = ctx.createGain();
+  const delay = ctx.createDelay(4);
+  const fb = ctx.createGain();
+  const lp = ctx.createBiquadFilter(); lp.type = "lowpass";
+  send.connect(straight).connect(delay).connect(lp).connect(wet);
   lp.connect(fb).connect(delay);
-  const d = { send, delay, fb, lp, wet, amount: 0, bpm };
-  d.setAmount = (a) => { d.amount = Math.max(0, Math.min(1, a)); send.gain.setTargetAtTime(d.amount, ctx.currentTime, 0.02); };
-  d.setBpm = (b) => { d.bpm = b; delay.delayTime.setTargetAtTime(Math.min(3.9, (60 / b) * 0.75), ctx.currentTime, 0.05); };
-  d.setBpm(bpm);
+  // ping-pong path: a mono input into the left line, the two lines feeding each other
+  const pp = ctx.createGain(); pp.gain.value = 0; pp.channelCount = 1; pp.channelCountMode = "explicit";
+  const dl = ctx.createDelay(4), dr = ctx.createDelay(4);
+  const lpl = ctx.createBiquadFilter(), lpr = ctx.createBiquadFilter(); lpl.type = lpr.type = "lowpass";
+  const fbl = ctx.createGain(), fbr = ctx.createGain();
+  const merge = ctx.createChannelMerger(2);
+  send.connect(pp).connect(dl).connect(lpl);
+  lpl.connect(merge, 0, 0); lpl.connect(fbl).connect(dr).connect(lpr);
+  lpr.connect(merge, 0, 1); lpr.connect(fbr).connect(dl);
+  merge.connect(wet);
+  const d = { send, delay, fb, lp, wet, bpm, ...DELAY_DEFAULTS };
+  const now = () => ctx.currentTime;
+  const time = () => Math.min(3.9, (60 / d.bpm) * (DELAY_DIVS[d.div] ?? 0.75));
+  const applyTime = () => { for (const n of [delay, dl, dr]) n.delayTime.setTargetAtTime(time(), now(), 0.05); };
+  d.setAmount = (a) => { d.amount = Math.max(0, Math.min(1, a)); send.gain.setTargetAtTime(d.amount, now(), 0.02); };
+  d.setBpm = (b) => { d.bpm = b; applyTime(); };
+  d.set = (o) => {
+    if (o.amount !== undefined && o.amount !== d.amount) d.setAmount(o.amount);
+    if (o.div !== undefined && DELAY_DIVS[o.div] && o.div !== d.div) { d.div = o.div; applyTime(); }
+    if (o.feedback !== undefined) { d.feedback = Math.max(0, Math.min(0.85, o.feedback)); for (const n of [fb, fbl, fbr]) n.gain.setTargetAtTime(d.feedback, now(), 0.02); }
+    if (o.lowpass !== undefined) { d.lowpass = Math.max(400, Math.min(8000, o.lowpass)); for (const n of [lp, lpl, lpr]) n.frequency.setTargetAtTime(d.lowpass, now(), 0.02); }
+    if (o.pingpong !== undefined && !!o.pingpong !== d.pingpong) {
+      d.pingpong = !!o.pingpong;
+      straight.gain.setTargetAtTime(d.pingpong ? 0 : 1, now(), 0.02); pp.gain.setTargetAtTime(d.pingpong ? 1 : 0, now(), 0.02);
+    }
+  };
+  // start values are set directly, so an offline render begins at them
+  const v = { ...DELAY_DEFAULTS, ...init };
+  fb.gain.value = fbl.gain.value = fbr.gain.value = d.feedback = v.feedback;
+  lp.frequency.value = lpl.frequency.value = lpr.frequency.value = d.lowpass = v.lowpass;
+  d.div = v.div; d.pingpong = !!v.pingpong;
+  straight.gain.value = d.pingpong ? 0 : 1; pp.gain.value = d.pingpong ? 1 : 0;
+  delay.delayTime.value = dl.delayTime.value = dr.delayTime.value = time();
+  d.amount = v.amount; send.gain.value = v.amount;
   return d;
 }
 
-// opts: {master: 0..1, bpm, random, rainParams}
+// the two ported engines behind the voice interface
+class SawVoice {
+  constructor(ctx, bus, opts) { this.id = "saw"; this.bus = bus; this.engine = new SawEngine(ctx, bus, opts.random ? { random: opts.random } : {}); this.bpm = opts.bpm || 90; }
+  get params() { return this.engine.p; }
+  set(name, v) { this.engine.set(name, v); }
+  connect(send) { this.bus.connect(send); }
+  allOff() { this.engine.allOff(); }
+  // returns the seconds the voice will sound
+  noteOn(ev, when) {
+    const bpm = this.bpm;
+    if (ev.arp || ev.flourish) {
+      // short notes: faster saw rate, envelope scaled to the step; id offset so an arp note never steals a plant voice
+      const scale = Math.max(0.12, Math.min(1, (ev.dur * 60 / bpm) / 1.2)) * (ev.gate ?? 1);
+      this.engine.noteOn(1000 + ev.note, ev.freq, Math.max(1.5, (bpm / 90) * 2.5), when, scale, 0.45);
+      return 1.55 * scale;
+    }
+    this.engine.noteOn(ev.layer ? 2000 + ev.plant * 128 + ev.note : ev.note, ev.freq, bpm / 90, when, 1, ev.layer ? 0.7 : 1);
+    return 1.55;
+  }
+}
+class RainVoice {
+  constructor(ctx, bus, opts) {
+    this.id = "rain"; this.bus = bus; this.rand = opts.rand || Math.random; this.bpm = opts.bpm || 90;
+    this.engine = new RainEngine(ctx, bus, { params: { cutoff: 500, ...(opts.rainParams || {}) } });
+  }
+  get params() { return this.engine.p; }
+  set(name, v) { this.engine.set(name, v); }
+  connect(send) { this.bus.connect(send); }
+  allOff() { this.engine.allOff(); }
+  noteOn(ev, when) {
+    const e = this.engine;
+    if (ev.arp || ev.flourish) {
+      // rain's own envelope, with the release set from the step and the gate
+      const rel = Math.max(0.06, (ev.dur * 60 / this.bpm) * (ev.gate ?? 1) * 1.5);
+      e.set("release", rel); e.set("pan", this.rand()); e.set("gain", 0.6);
+      e.hz(ev.freq / 2, when, 0.6);
+      return rel * 1.2 + 0.06;
+    }
+    const rel = ev.maxLen ? Math.min(ev.maxLen, 2 + Math.floor(this.rand() * 7)) : 2 + Math.floor(this.rand() * 7);
+    e.set("release", rel);
+    e.set("pan", this.rand());
+    e.set("gain", Math.min(1, 0.3 + this.rand()));
+    e.hz(ev.freq / 2, when);
+    return rel * 1.2 + 0.06;
+  }
+}
+
+// opts: {master: 0..1, bpm, random, rand, rainParams, delays: {saw, rain}}
 export function createChain(ctx, opts = {}) {
+  const mix = ctx.createGain();
   const master = ctx.createGain();
   master.gain.value = opts.master ?? 0.7;
   const mute = ctx.createGain();
   const limiter = ctx.createDynamicsCompressor();
   limiter.threshold.value = -10; limiter.knee.value = 4; limiter.ratio.value = 20;
   limiter.attack.value = 0.003; limiter.release.value = 0.15;
-  const delay = createDelay(ctx, opts.bpm || 90);
-  master.connect(mute);
-  mute.connect(limiter);
-  mute.connect(delay.send);
-  delay.wet.connect(limiter);
+  mix.connect(master).connect(mute).connect(limiter);
   // safety: a soft clip after the limiter so a dense arp over loops and delay never hard-clips the file or the DAC
   const clip = ctx.createWaveShaper();
-  { const n = 2048, c = new Float32Array(n); for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; c[i] = 0.89 * Math.tanh(x * 1.6) / Math.tanh(1.6); } clip.curve = c; clip.oversample = "2x"; }
+  { const n = 2048, c = new Float32Array(n); for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; c[i] = 0.88 * Math.tanh(x * 1.6) / Math.tanh(1.6); } clip.curve = c; clip.oversample = "2x"; }
   limiter.connect(clip).connect(opts.destination || ctx.destination);
-  const saw = new SawEngine(ctx, master, opts.random ? { random: opts.random } : {});
-  const rain = new RainEngine(ctx, master, { params: { cutoff: 500, ...(opts.rainParams || {}) } });
-  const C = { ctx, master, mute, limiter, clip, delay, saw, rain, engine: opts.engine || "saw", played: 0, rand: opts.rand || Math.random };
+
+  const bpm = opts.bpm || 90;
+  const C = { ctx, mix, master, mute, limiter, clip, delays: {}, voices: {}, played: 0, bpm, rand: opts.rand || Math.random, spans: [], countSpans: !!opts.countSpans };
+  C.addVoice = (name, make) => {
+    const bus = ctx.createGain();
+    bus.connect(mix);
+    const v = make(bus);
+    C.voices[name] = v;
+    const d = createDelay(ctx, C.bpm, (opts.delays || {})[name]);
+    C.delays[name] = d;
+    v.connect(d.send);
+    d.wet.connect(mix);
+    return v;
+  };
+  C.addVoice("saw", (bus) => new SawVoice(ctx, bus, { random: opts.random, bpm }));
+  C.addVoice("rain", (bus) => new RainVoice(ctx, bus, { rand: C.rand, rainParams: opts.rainParams, bpm }));
+  C.saw = C.voices.saw.engine; C.rain = C.voices.rain.engine;
+  // the v0.2.0 single delay: both lines at once
+  C.delay = {
+    get amount() { return C.delays.saw.amount; },
+    setAmount(a) { for (const d of Object.values(C.delays)) d.setAmount(a); },
+    setBpm(b) { C.setBpm(b); },
+  };
+  C.setBpm = (b) => { C.bpm = b; for (const d of Object.values(C.delays)) d.setBpm(b); for (const v of Object.values(C.voices)) v.bpm = b; };
+  C.setDelays = (o) => { for (const k of Object.keys(o)) C.delays[k]?.set(o[k]); };
   C.setMaster = (v) => master.gain.setTargetAtTime(Math.max(0, Math.min(1, v)), ctx.currentTime, 0.02);
   C.setMute = (m) => mute.gain.setTargetAtTime(m ? 0 : 1, ctx.currentTime, 0.01);
-  C.allOff = () => { saw.allOff(); rain.allOff(); };
-  // ev: a garden event {plant, note, freq, dur, arp?, layer?}; bpm for the saw rate; when: ctx time
-  C.playNote = (ev, bpm, when) => {
-    const useRain = C.engine === "rain" || (C.engine === "both" && (ev.plant === 2 || ev.layer));
-    if (ev.arp) {
-      // the arpeggiator plays short saw notes: faster saw rate, fixed short envelope via rate
-      // id offset so an arp note never steals a plant voice of the same pitch; envelope scaled to the step
-      saw.noteOn(1000 + ev.note, ev.freq, Math.max(1.5, (bpm / 90) * 2.5), when, Math.max(0.12, Math.min(1, (ev.dur * 60 / bpm) / 1.2)), 0.45);
-    } else if (useRain) {
-      rain.set("release", 2 + Math.floor(C.rand() * 7));
-      rain.set("pan", C.rand());
-      rain.set("gain", Math.min(1, 0.3 + C.rand()));
-      rain.hz(ev.freq / 2, when);
-    } else {
-      saw.noteOn(ev.layer ? 2000 + ev.plant * 128 + ev.note : ev.note, ev.freq, bpm / 90, when, 1, ev.layer ? 0.7 : 1);
-    }
+  C.allOff = () => { for (const v of Object.values(C.voices)) v.allOff(); };
+  // ev: a garden event {plant, note, freq, dur, engine, arp?, layer?}; when: ctx time
+  C.playNote = (ev, bpm2, when) => {
+    if (bpm2 && bpm2 !== C.bpm) { C.bpm = bpm2; for (const v of Object.values(C.voices)) v.bpm = bpm2; }
+    const v = C.voices[ev.engine] || C.voices.saw;
+    const len = v.noteOn(ev, when);
+    if (C.countSpans) C.spans.push([when, when + (len || 0), v.id]);
     C.played++;
   };
   return C;
+}
+
+// the most voices sounding at once, from recorded [start, end] spans
+export function maxConcurrent(spans) {
+  const ev = [];
+  for (const [a, b] of spans) { ev.push([a, 1], [b, -1]); }
+  ev.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  let n = 0, m = 0;
+  for (const [, d] of ev) { n += d; if (n > m) m = n; }
+  return m;
 }

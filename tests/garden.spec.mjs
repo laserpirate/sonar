@@ -86,11 +86,14 @@ test("g4: enable: chain runs, meter reads a level within 3 s, delay and arp play
   await page.click("#b-enable");
   await page.waitForFunction(() => window.__sonar.audio && window.__sonar.audio.ctx.state === "running", null, { timeout: 5000 });
   await page.waitForFunction(() => window.__sonar.outDb > -60, null, { timeout: 3000 });
-  const t = await page.locator("#f-out").innerText();
-  expect(t).toMatch(/^out -?\d+ dB$/);
+  // the HUD is on its own 200 ms timer, so wait for it rather than reading it once
+  await expect(page.locator("#f-out")).toHaveText(/^out -?\d+ dB$/);
   expect(await page.locator("#f-nosig").isVisible()).toBe(false);
-  await page.waitForTimeout(3000);
-  const a = await page.evaluate(() => ({ played: window.__sonar.audio.played, delay: window.__sonar.audio.chain.delay.amount, voices: window.__sonar.audio.saw.voices.length, db: window.__sonar.outDb }));
+  // the meter is a 21 ms peak and lands in the gaps between notes, so take the loudest reading over 3 s
+  let loudest = -200;
+  for (let i = 0; i < 12; i++) { await page.waitForTimeout(250); loudest = Math.max(loudest, await page.evaluate(() => window.__sonar.outDb)); }
+  const a = await page.evaluate(() => ({ played: window.__sonar.audio.played, delay: window.__sonar.audio.chain.delay.amount, voices: window.__sonar.audio.saw.voices.length }));
+  a.db = loudest;
   expect(a.played).toBeGreaterThan(8); expect(a.delay).toBeCloseTo(0.4, 2); expect(a.db).toBeGreaterThan(-40);
   await page.evaluate(() => { Object.defineProperty(document, "hidden", { value: true, configurable: true }); document.dispatchEvent(new Event("visibilitychange")); Object.defineProperty(document, "hidden", { value: false, configurable: true }); document.dispatchEvent(new Event("visibilitychange")); });
   expect(await page.evaluate(() => window.__sonar.audio.ctx.state)).toBe("running");

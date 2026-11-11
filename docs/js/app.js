@@ -1,7 +1,7 @@
 // app.js · sonar page: renderer + sim garden (garden.js) + live (OSC over WebSocket) + keys + controls.
 // Audio engines and MIDI load only after the Enable click (audio.js, midi.js).
 import { Plant, LSystem, Turtle, makeRandom, DRAW } from "./lsys.js";
-import { Garden, LOOP_BARS, MAX_LAYERS, SCALE_NAMES, ARP_MODES, ARP_RATES, noteName } from "./garden.js";
+import { Garden, LOOP_BARS, MAX_LAYERS, SCALE_NAMES, ARP_MODES, ARP_RATES, ARP_ENGINES, noteName } from "./garden.js";
 import { OscWs } from "./osc-ws.js";
 import { Stage } from "./stage.js";
 import { addPanel, group, slider, select, buttons, button, note, refreshAll, openPanel, togglePanel, applyDefaultPanels, controls } from "./ui.js";
@@ -54,6 +54,7 @@ window.__garden = G;
 S.instr = G.instr;
 G.onGen = (g) => { S.lastGen[g.plant] = { gen: g.gen, max: g.max, instr: g.instr }; lit.get(g.plant)?.clear(); emit("gen", g); };
 for (let k = 0; k < 2; k++) S.lastGen[k + 1] = { gen: G.plants[k].currentGeneration, max: G.plants[k].maxGenerations, instr: G.instr[k] };
+G.setAllDelays(S.delay);
 if (q.get("pitch")) G.setPitch(Number(q.get("pitch")));
 if (q.get("growth")) G.setGrowth(Number(q.get("growth")));
 if (q.get("arp")) G.setArp({ mode: q.get("arp"), rate: q.get("arprate") || "1/8", octaves: Number(q.get("arpoct")) || 1 });
@@ -111,7 +112,7 @@ function liveGenMsg(a) {
 function noteEvent(ev) {
   const { plant, idx, x, y } = ev;
   if (idx > 0) litOf(plant).set(idx, 1);
-  if (!ev.arp) noteAt.set(plant, { x, y, idx, t: performance.now() });
+  if (!ev.arp && !ev.flourish) noteAt.set(plant, { x, y, idx, t: performance.now() });
   S.notes++;
   S.lastNote = { plant, idx, note: ev.note, freq: ev.freq, arp: !!ev.arp, layer: ev.layer || 0 };
   emit("note", { ...ev, active: plant === S.active });
@@ -205,10 +206,14 @@ export const act = {
     emit("state", S);
   },
   pitch(semi) { G.setPitch(semi); if (live()) link.send("/param/root_note_offset", [Math.round(semi)]); emit("state", S); },
-  delay(a) { S.delay = clamp01(a); emit("state", S); },
+  delay(a) { S.delay = clamp01(a); G.setAllDelays(S.delay); emit("state", S); }, // both lines, as v0.2.0's one delay
+  delayOf(engine, o) { G.setDelay(engine, o); emit("state", S); },
+  route(id, voice) { G.setRoute(id, voice); emit("state", S); },
+  layerRoute(voice) { G.setLayerRoute(voice); emit("state", S); },
+  flourish(a) { G.setFlourish(a); emit("state", S); },
   growth(bars) { G.setGrowth(bars); emit("state", S); },
   key(root, scale) { G.setKey(root, scale); if (live()) { if (root !== undefined) link.send("/param/root_note", [root]); } emit("state", S); },
-  arp(o) { G.setArp(o); emit("state", S); },
+  arp(o, engine = "saw") { G.setArp(o, engine); emit("state", S); },
   arpCycle() { const i = ARP_MODES.indexOf(G.arp.mode); G.setArp({ mode: ARP_MODES[(i + 1) % ARP_MODES.length] }); emit("state", S); },
   mode(m) { S.mode = m || (S.mode === "wall" ? "norns" : "wall"); resize(); emit("state", S); },
   blackout(v) { v === undefined ? window.sonarBlackout.toggle() : window.sonarBlackout.set(v); },
@@ -286,14 +291,32 @@ select(pTempo, { id: "s-scale", label: "scale", options: SCALE_NAMES, get: () =>
 slider(pTempo, { id: "r-growth", label: "growth", min: 0, max: 8, get: () => G.growth, set: (v) => act.growth(v), fmt: (x) => (x ? x + " bar" : "off") });
 
 const pArp = addPanel("arp", "arp", { open: true });
-group(pArp, "arp");
-select(pArp, { id: "s-arp", label: "mode", options: ARP_MODES, get: () => G.arp.mode, set: (v) => act.arp({ mode: v }) });
-select(pArp, { id: "s-arprate", label: "rate", options: Object.keys(ARP_RATES), get: () => G.arp.rate, set: (v) => act.arp({ rate: v }) });
-select(pArp, { id: "s-arpoct", label: "octaves", options: [[1, "1 oct"], [2, "2 oct"], [3, "3 oct"]], get: () => G.arp.octaves, set: (v) => act.arp({ octaves: v }) });
+for (const e of ARP_ENGINES) {
+  const sfx = e === "saw" ? "" : "-" + e, A = G.arps[e];
+  group(pArp, "arp " + e);
+  select(pArp, { id: "s-arp" + sfx, label: "mode", label2: `arp ${e} mode`, options: ARP_MODES, get: () => A.mode, set: (v) => act.arp({ mode: v }, e) });
+  select(pArp, { id: "s-arprate" + sfx, label: "rate", label2: `arp ${e} rate`, options: Object.keys(ARP_RATES), get: () => A.rate, set: (v) => act.arp({ rate: v }, e) });
+  select(pArp, { id: "s-arpoct" + sfx, label: "octaves", label2: `arp ${e} octaves`, options: [[1, "1 oct"], [2, "2 oct"], [3, "3 oct"]], get: () => A.octaves, set: (v) => act.arp({ octaves: v }, e) });
+  slider(pArp, { id: "r-arpgate" + sfx, label: "gate", label2: `arp ${e} gate`, min: 10, max: 100, get: () => A.gate, set: (v) => act.arp({ gate: v }, e), fmt: (x) => x + " %" });
+  slider(pArp, { id: "r-arpsteps" + sfx, label: "steps", label2: `arp ${e} steps`, min: 1, max: 16, get: () => A.steps, set: (v) => act.arp({ steps: v, pulses: Math.min(A.pulses, v) }, e) });
+  slider(pArp, { id: "r-arppulses" + sfx, label: "pulses", label2: `arp ${e} pulses`, min: 0, max: 16, get: () => A.pulses, set: (v) => act.arp({ pulses: v }, e) });
+  slider(pArp, { id: "r-arprot" + sfx, label: "rotation", label2: `arp ${e} rotation`, min: 0, max: 15, get: () => A.rotation, set: (v) => act.arp({ rotation: v }, e) });
+}
+group(pArp, "answer");
+slider(pArp, { id: "r-flourish", label: "flourish", min: 0, max: 1, step: 0.01, get: () => G.flourish, set: (v) => act.flourish(v), fmt: (x) => Math.round(x * 100) + " %" });
 
 const pDelay = addPanel("delay", "delay", { open: true });
-group(pDelay, "delay");
-slider(pDelay, { id: "r-delay", label: "amount", min: 0, max: 1, step: 0.01, get: () => S.delay, set: (v) => act.delay(v), fmt: (x) => x.toFixed(2) });
+group(pDelay, "delay, both");
+slider(pDelay, { id: "r-delay", label: "amount", label2: "delay both", min: 0, max: 1, step: 0.01, get: () => S.delay, set: (v) => act.delay(v), fmt: (x) => x.toFixed(2) });
+for (const e of ARP_ENGINES) {
+  const D = G.delays[e];
+  group(pDelay, "delay " + e);
+  slider(pDelay, { id: "r-damt-" + e, label: "amount", label2: `delay ${e} amount`, min: 0, max: 1, step: 0.01, get: () => D.amount, set: (v) => act.delayOf(e, { amount: v }), fmt: (x) => x.toFixed(2) });
+  select(pDelay, { id: "s-ddiv-" + e, label: "time", label2: `delay ${e} time`, options: [["1/16", "1/16"], ["1/8", "1/8"], ["d1/8", "dotted 1/8"], ["1/4", "1/4"], ["1/2", "1/2"]], get: () => D.div, set: (v) => act.delayOf(e, { div: v }) });
+  slider(pDelay, { id: "r-dfb-" + e, label: "feedback", label2: `delay ${e} feedback`, min: 0, max: 0.85, step: 0.01, get: () => D.feedback, set: (v) => act.delayOf(e, { feedback: v }), fmt: (x) => x.toFixed(2) });
+  slider(pDelay, { id: "r-dlp-" + e, label: "low-pass", label2: `delay ${e} low-pass`, min: 400, max: 8000, step: 10, get: () => D.lowpass, set: (v) => act.delayOf(e, { lowpass: v }), fmt: (x) => Math.round(x) + " Hz" });
+  buttons(pDelay, [{ id: "b-dpp-" + e, label: "ping-pong", label2: `delay ${e} ping-pong`, fire: () => act.delayOf(e, { pingpong: !D.pingpong }), on: () => D.pingpong }]);
+}
 
 const pPlants = addPanel("plants", "plants", { open: true });
 group(pPlants, "plant");
@@ -305,6 +328,9 @@ buttons(pPlants, [
 ]);
 slider(pPlants, { id: "r-angle", label: "angle", min: -360, max: 360, get: () => angleOf(), set: (v) => act.angle(v), fmt: (x) => Math.round(x) + " deg", random: false });
 slider(pPlants, { id: "r-length", label: "length", min: 0.35, max: 1.6, step: 0.01, get: () => lengthOf(), set: (v) => act.length(v), fmt: (x) => x.toFixed(2), random: false });
+const VOICE_OPTS = [["", "default"], ["saw", "saw"], ["rain", "rain"]];
+const sRoute = select(pPlants, { id: "s-route", label: "voice", label2: "active plant voice", options: VOICE_OPTS, get: () => G.routes[S.active] ?? "", set: (v) => act.route(S.active, v), random: false });
+const sLoopRoute = select(pPlants, { id: "s-route-loops", label: "loop voice", options: VOICE_OPTS, get: () => G.layerRoute ?? "", set: (v) => act.layerRoute(v), random: false });
 buttons(pPlants, [
   { id: "b-gen", label: "next gen", title: "N or two-finger tap", fire: () => act.nextGen() },
   { id: "b-palette", label: "palette", title: "long press a plant", fire: () => act.palette(), noMap: true },

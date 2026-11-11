@@ -12,9 +12,14 @@ import { makeRandom } from "./lsys.js";
 export async function renderGarden(catalog, opts = {}) {
   const seconds = opts.seconds || 60, sr = opts.sr || 48000, bpm = opts.bpm || 90, fps = opts.fps || 60;
   const ctx = new OfflineAudioContext(2, Math.ceil(sr * seconds), sr);
-  const C = createChain(ctx, { master: opts.master ?? 0.7, bpm, engine: opts.engine || "saw", random: makeRandom(0x5a3), rand: makeRandom(0x77) });
-  C.delay.setAmount(opts.delay || 0);
+  const delays = { saw: { amount: opts.delay || 0, ...(opts.delays?.saw || {}) }, rain: { amount: opts.delay || 0, ...(opts.delays?.rain || {}) } };
+  const C = createChain(ctx, { master: opts.master ?? 0.7, bpm, random: makeRandom(0x5a3), rand: makeRandom(0x77), delays, countSpans: true });
   const G = new Garden({ catalog, seed: opts.seed ?? 1, instr: opts.instr });
+  if (opts.engine) G.setEngineMode(opts.engine);
+  if (opts.routes) for (const [id, v] of Object.entries(opts.routes)) G.setRoute(Number(id), v);
+  if (opts.layerRoute) G.setLayerRoute(opts.layerRoute);
+  if (opts.arps) for (const [e, o] of Object.entries(opts.arps)) G.setArp(o, e);
+  if (opts.flourish) G.setFlourish(opts.flourish);
   if (opts.pitch) G.setPitch(opts.pitch);
   if (opts.growth) G.setGrowth(opts.growth);
   if (opts.key) G.setKey(opts.key[0], opts.key[1]);
@@ -35,14 +40,14 @@ export async function renderGarden(catalog, opts = {}) {
       for (const ev of G.step(now)) {
         const when = ev.t / bps;
         C.playNote(ev, bpm, Math.max(when, frame * dt));
-        log.push({ k: ev.arp ? "arp" : ev.layer ? "loop" : "note", t: ev.t, note: ev.note, plant: ev.plant });
+        log.push({ k: ev.arp ? "arp" : ev.flourish ? "flourish" : ev.layer ? "loop" : "note", t: ev.t, note: ev.note, plant: ev.plant, engine: ev.engine });
       }
     }
   };
   for (let s = 1; s < seconds; s++) ctx.suspend(s).then(() => { drive(s + 1); ctx.resume(); });
   drive(1);
   const buf = await ctx.startRendering();
-  return { buf, log, state: G.state() };
+  return { buf, log, state: G.state(), spans: C.spans };
 }
 
 export { levels, pcm16base64 } from "./score-offline.js";

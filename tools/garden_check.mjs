@@ -33,6 +33,20 @@ out.pitch = p1.evs.length === p2.evs.length && p1.evs.every((e, i) => p2.evs[i].
 // 7 growth: 1 bar per step breathes the generation
 const gr = run(9, 48, (g) => g.setGrowth(1));
 out.growth = { gens: gr.g.state().gens[0] };
+// 8 two arps: each feeds from the plants routed to its engine
+const two = run(3, 32, (g) => { g.setRoute(2, "rain"); g.setArp({ mode: "up", rate: "1/8" }, "saw"); g.setArp({ mode: "up", rate: "1/16" }, "rain"); });
+const eng = (e) => two.evs.filter((x) => x.arp && x.engine === e).length;
+out.twoArps = { saw: eng("saw"), rain: eng("rain"), plant1Saw: two.evs.filter((x) => x.plant === 1).every((x) => x.engine === "saw"), plant2Rain: two.evs.filter((x) => x.plant === 2).every((x) => x.engine === "rain") };
+// 9 euclid: 16 steps, 5 pulses keeps 5 of each 16 grid steps
+const eu = run(3, 80, (g) => g.setArp({ mode: "up", rate: "1/16", steps: 16, pulses: 5, rotation: 0 }));
+const euLate = eu.evs.filter((x) => x.arp && x.t >= 32 && x.t < 64).length;
+out.euclid = { perBar16: euLate / 8, expected: 5 };
+// 10 flourish: deterministic, runs of 2 to 5 on the other engine
+const f1 = run(3, 64, (g) => g.setFlourish(0.8)), f2 = run(3, 64, (g) => g.setFlourish(0.8));
+const fl = f1.evs.filter((x) => x.flourish);
+out.flourish = { n: fl.length, same: sig(f1.evs) === sig(f2.evs), otherEngine: fl.every((x) => x.engine === "rain") };
+// 11 flags off: no flourish, gate 100, full euclid leave v0.2.0's log unchanged
+out.defaultsClean = run(3, 64).evs.every((x) => !x.flourish && x.engine === "saw");
 console.log(JSON.stringify(out, null, 1));
-const ok = out.determinism && out.layer.loopIdentical && out.layer.start === 4 && out.maxLayers === 4 && out.cleared && out.arp.notes > 20 && out.key.sameTimes && out.key.differentNotes && out.pitch;
+const ok = out.twoArps.saw > 10 && out.twoArps.rain > 10 && out.twoArps.plant1Saw && out.twoArps.plant2Rain && Math.abs(out.euclid.perBar16 - 5) < 0.51 && out.flourish.n > 0 && out.flourish.same && out.flourish.otherEngine && out.defaultsClean && out.determinism && out.layer.loopIdentical && out.layer.start === 4 && out.maxLayers === 4 && out.cleared && out.arp.notes > 20 && out.key.sameTimes && out.key.differentNotes && out.pitch;
 console.log(ok ? "OK" : "FAIL"); process.exit(ok ? 0 : 1);

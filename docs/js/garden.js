@@ -42,9 +42,31 @@ export function scaleOfLength(root, scale, length = 24) {
 
 export const ARP_MODES = ["off", "up", "down", "updown", "random"];
 export const ARP_RATES = { "1/4": 1, "1/8": 0.5, "1/8t": 1 / 3, "1/16": 0.25 };
+export const ARP_ENGINES = ["saw", "rain"];
+const newArp = (seed) => ({ mode: "off", rate: "1/8", octaves: 1, size: 4, gate: 100, steps: 16, pulses: 16, rotation: 0, buf: [], ix: 0, nextT: null, pos: 0, random: makeRandom(seed) });
+export const DELAY_DEFAULT = () => ({ amount: 0, div: "d1/8", feedback: 0.45, lowpass: 2400, pingpong: false });
+// Euclidean rhythm: is step i of `steps` a pulse, with `pulses` spread evenly and a rotation
+export const euclidHit = (i, steps, pulses, rotation = 0) => {
+  if (pulses >= steps) return true;
+  if (pulses <= 0) return false;
+  const k = (((i + rotation) % steps) + steps) % steps;
+  return (k * pulses) % steps < pulses;
+};
 
 // which preset a seed lands on, and the second plant's preset
 export const presetOfSeed = (seed, n) => (Math.abs(Math.floor(seed)) % n) + 1;
+
+// sentence indices of the F at bracket depth 2 or more; every F when the plant has no such depth
+function outerTwigs(s) {
+  const deep = [], all = [];
+  let d = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === "[") d++; else if (c === "]") d--;
+    else if (c === "F") { all.push(i + 1); if (d >= 2) deep.push(i + 1); }
+  }
+  return deep.length ? deep : all;
+}
 
 export class Garden {
   // opts: {catalog, seed, bpmRef?: () => bpm}
@@ -58,10 +80,14 @@ export class Garden {
     this.growth = 0;           // bars per generation step, 0 = off
     this.growthDir = 1;
     this.nextGrowthBar = null;
-    this.arp = { mode: "off", rate: "1/8", octaves: 1, size: 4 };
-    this.arpBuf = [];          // last distinct scale indices played, newest last
-    this.arpIx = 0; this.arpDir = 1; this.nextArpT = null;
-    this.arpRandom = makeRandom(0x9e37);
+    this.arps = { saw: newArp(0x9e37), rain: newArp(0x7f4a) };
+    this.delays = { saw: DELAY_DEFAULT(), rain: DELAY_DEFAULT() };
+    this.engineMode = "saw";   // v0.2.0's global engine: saw, rain or both
+    this.routes = {};          // plant id -> voice id, overrides engineMode
+    this.layerRoute = null;    // voice for all loop layers, overrides engineMode
+    this.flourish = 0;         // 0..1: the other voice answers a plant note with a quick rising run
+    this.flourishRandom = makeRandom(0x51f3);
+    this.future = [];          // notes already decided, due later (flourish runs)
     this.layers = [];
     this.active = 1;
     this.playing = true;
@@ -83,7 +109,7 @@ export class Garden {
     this.pending = [null, null];
     this.t0 = this.t0 ?? 0;
     for (let k = 0; k < 2; k++) this.setup(k, this.instr[k]);
-    this.arpBuf = [];
+    this._clearArps();
     return this.seedValue;
   }
   setup(k, instr, gen) {
@@ -125,15 +151,37 @@ export class Garden {
     this.notes = scaleOfLength(this.key.root, this.key.scale, this.D.scale_length || 24);
     for (const s of this.seqs) if (s) s.notes = this.notes;
     for (const L of this.layers) this._rerecord(L);
-    this.arpBuf = [];
+    this._clearArps();
   }
+  _clearArps() { for (const A of Object.values(this.arps)) A.buf = []; }
+  get arp() { return this.arps.saw; }        // the v0.2.0 name: the saw arp
+  get arpBuf() { return this.arps.saw.buf; }
   setPitch(semi) { this.pitch = Math.max(-24, Math.min(24, Math.round(semi))) || 0; }
   setGrowth(bars) { this.growth = Math.max(0, Math.min(16, Math.round(bars))) || 0; this.nextGrowthBar = null; }
-  setArp(o) {
-    Object.assign(this.arp, o);
-    if (!ARP_MODES.includes(this.arp.mode)) this.arp.mode = "off";
-    if (!ARP_RATES[this.arp.rate]) this.arp.rate = "1/8";
-    this.nextArpT = null;
+  setArp(o, engine = "saw") {
+    const A = this.arps[engine];
+    if (!A) return;
+    Object.assign(A, o);
+    if (!ARP_MODES.includes(A.mode)) A.mode = "off";
+    if (!ARP_RATES[A.rate]) A.rate = "1/8";
+    A.gate = Math.max(10, Math.min(100, A.gate));
+    A.steps = Math.max(1, Math.min(16, Math.round(A.steps)));
+    A.pulses = Math.max(0, Math.min(A.steps, Math.round(A.pulses)));
+    A.rotation = Math.max(0, Math.min(15, Math.round(A.rotation)));
+    A.nextT = null;
+  }
+  setDelay(engine, o) { Object.assign(this.delays[engine], o); }
+  setAllDelays(amount) { for (const d of Object.values(this.delays)) d.amount = amount; }
+  setEngineMode(m) { if (["saw", "rain", "both"].includes(m)) this.engineMode = m; }
+  setRoute(id, voice) { if (voice) this.routes[id] = voice; else delete this.routes[id]; }
+  setLayerRoute(voice) { this.layerRoute = voice || null; }
+  setFlourish(a) { this.flourish = Math.max(0, Math.min(1, a)); }
+  // which voice a plant plays
+  engineOf(id, isLayer) {
+    if (isLayer && this.layerRoute) return this.layerRoute;
+    if (this.routes[id]) return this.routes[id];
+    if (this.engineMode === "both") return id === 2 || isLayer ? "rain" : "saw";
+    return this.engineMode;
   }
 
   // ---- loop layers ---------------------------------------------------------
@@ -215,47 +263,57 @@ export class Garden {
         this.onGen?.({ plant: this.active, gen: p.currentGeneration, max: p.maxGenerations, instr: this.instr[this.active - 1], sim: true, growth: true });
       }
     }
-    // arpeggiator on the beat grid
-    if (this.arp.mode !== "off" && this.arpBuf.length) {
-      const q = ARP_RATES[this.arp.rate];
-      if (this.nextArpT === null) this.nextArpT = Math.ceil(now / q) * q;
-      for (let guard = 0; guard < 64 && this.nextArpT <= now; guard++) {
-        const t = this.nextArpT; this.nextArpT += q;
-        if (now - t > 1) continue;
-        const ev = this._arpNote(t, q);
+    // arpeggiators on the beat grid, one per engine
+    for (const [engine, A] of Object.entries(this.arps)) {
+      if (A.mode === "off" || !A.buf.length) continue;
+      const q = ARP_RATES[A.rate];
+      if (A.nextT === null) A.nextT = Math.ceil(now / q) * q;
+      for (let guard = 0; guard < 64 && A.nextT <= now; guard++) {
+        const t = A.nextT; A.nextT += q;
+        const hit = euclidHit(A.pos++, A.steps, A.pulses, A.rotation);
+        if (!hit || now - t > 1) continue;
+        const ev = this._arpNote(engine, A, t, q);
         if (ev) out.push(ev);
       }
+    }
+    // notes decided earlier and due now
+    if (this.future.length) {
+      this.future.sort((a, b) => a.t - b.t);
+      while (this.future.length && this.future[0].t <= now) { const ev = this.future.shift(); if (now - ev.t <= 1) { this.log.push(ev); out.push(ev); } }
     }
     return out;
   }
   _emit(ev) {
+    ev.engine = this.engineOf(ev.plant, !!ev.layer);
     // pitch (semitones) applied to everything the garden plays
     if (this.pitch) { ev.note += this.pitch; ev.freq *= 2 ** (this.pitch / 12); }
-    // feed the arpeggiator with distinct scale indices, newest last
-    if (ev.scaleIndex !== undefined) {
+    // feed the arpeggiator of this plant's engine with distinct scale indices, newest last
+    const A = this.arps[ev.engine];
+    if (A && ev.scaleIndex !== undefined) {
       const si = ev.scaleIndex;
-      const i = this.arpBuf.indexOf(si);
-      if (i >= 0) this.arpBuf.splice(i, 1);
-      this.arpBuf.push(si);
-      while (this.arpBuf.length > this.arp.size) this.arpBuf.shift();
+      const i = A.buf.indexOf(si);
+      if (i >= 0) A.buf.splice(i, 1);
+      A.buf.push(si);
+      while (A.buf.length > A.size) A.buf.shift();
     }
     this.log.push(ev);
     if (this.log.length > 5000) this.log.splice(0, 1000);
+    if (this.flourish > 0 && !ev.layer) this._flourish(ev);
     return ev;
   }
-  _arpNote(t, q) {
-    const chord = this.arpBuf.slice().sort((a, b) => a - b);
-    const span = chord.length * this.arp.octaves;
+  _arpNote(engine, A, t, q) {
+    const chord = A.buf.slice().sort((a, b) => a - b);
+    const span = chord.length * A.octaves;
     if (!span) return null;
     let ix;
-    switch (this.arp.mode) {
-      case "up": ix = this.arpIx % span; this.arpIx++; break;
-      case "down": ix = span - 1 - (this.arpIx % span); this.arpIx++; break;
+    switch (A.mode) {
+      case "up": ix = A.ix % span; A.ix++; break;
+      case "down": ix = span - 1 - (A.ix % span); A.ix++; break;
       case "updown": {
         const cyc = Math.max(1, 2 * span - 2);
-        const m = this.arpIx % cyc; ix = m < span ? m : cyc - m; this.arpIx++; break;
+        const m = A.ix % cyc; ix = m < span ? m : cyc - m; A.ix++; break;
       }
-      default: ix = this.arpRandom(span) - 1; break;
+      default: ix = A.random(span) - 1; break;
     }
     const oct = Math.floor(ix / chord.length), si = chord[ix % chord.length];
     const N = this.notes.length;
@@ -263,9 +321,26 @@ export class Garden {
     if (base === undefined) return null;
     base += 12 * oct;
     const freq = mtof(base) * 2 ** (this.pitch / 12);
-    const ev = { plant: 0, arp: true, idx: 0, note: ftom(freq), freq, x: -1, y: -1, dur: q, t, scaleIndex: undefined };
+    const ev = { plant: 0, arp: true, engine, gate: A.gate / 100, idx: 0, note: ftom(freq), freq, x: -1, y: -1, dur: q, t, scaleIndex: undefined };
     this.log.push(ev);
     return ev;
+  }
+  // after phylla-arp (SymbiOS, Phylla biome), behaviour reimplemented: the other voice answers with a
+  // quick rising run of 2 to 5 scale notes, faster as the amount rises, its marks on outer twigs
+  _flourish(ev) {
+    const a = this.flourish, R = this.flourishRandom;
+    if (R() > 0.3 + a * 0.6 || ev.scaleIndex === undefined) return;
+    const other = ev.engine === "rain" ? "saw" : "rain";
+    const n = 2 + Math.round(a * 3), sp = 0.25 - 0.125 * a;
+    const N = this.notes.length, k = ev.plant - 1;
+    const twigs = this.plants[k] ? outerTwigs(this.plants[k].sentence) : [];
+    for (let i = 0; i < n; i++) {
+      const si = Math.max(0, Math.min(N - 1, Math.round(ev.scaleIndex) - 1 + i));
+      const base = this.notes[si] + 12;
+      const freq = mtof(base) * 2 ** (this.pitch / 12);
+      this.future.push({ plant: ev.plant, flourish: true, engine: other, gate: 0.5, idx: twigs.length ? twigs[Math.floor(R() * twigs.length)] : 0,
+        note: ftom(freq), freq, x: -1, y: -1, dur: sp, t: ev.t + (i + 1) * sp, scaleIndex: undefined });
+    }
   }
 
   // ---- geometry ------------------------------------------------------------
@@ -312,7 +387,7 @@ export class Garden {
   state() {
     return {
       seed: this.seedValue, instr: this.instr.slice(), key: { ...this.key }, pitch: this.pitch, growth: this.growth,
-      arp: { ...this.arp }, layers: this.layers.map((L) => ({ id: L.id, seed: L.seed, instr: L.instr, start: L.start, n: L.events.length, loops: L.loops })),
+      arp: { mode: this.arp.mode, rate: this.arp.rate, octaves: this.arp.octaves }, layers: this.layers.map((L) => ({ id: L.id, seed: L.seed, instr: L.instr, start: L.start, n: L.events.length, loops: L.loops })),
       gens: this.plants.map((p) => ({ gen: p.currentGeneration, max: p.maxGenerations })),
     };
   }

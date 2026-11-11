@@ -72,7 +72,7 @@ export class RainEngine {
     if (name === "hiss") this.hissGain.gain.setTargetAtTime(v / 500, this.ctx.currentTime, 0.05);
     if (name === "makeup") this.out.gain.value = v;
   }
-  hz(freq, when) {
+  hz(freq, when, ampScale = 1) {
     const ctx = this.ctx, p = this.p;
     const t0 = Math.max(ctx.currentTime, when ?? ctx.currentTime);
     const osc = ctx.createOscillator();
@@ -88,7 +88,7 @@ export class RainEngine {
     const rel = Math.max(0.02, p.release);
     env.gain.value = 0;
     env.gain.setValueAtTime(0, t0);
-    env.gain.linearRampToValueAtTime(p.amp, t0 + 0.01);
+    env.gain.linearRampToValueAtTime(p.amp * ampScale, t0 + 0.01);
     env.gain.setTargetAtTime(0, t0 + 0.01, rel / 4.6);
     let tail = env;
     if (p.bits < 24) {
