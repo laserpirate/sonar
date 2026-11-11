@@ -4,7 +4,8 @@
 //
 // opts: {seed, seconds, sr, bpm, engine, delay, pitch, growth, key: [root, scale],
 //        arp: {mode, rate, octaves}, layers: [{seed, atBeat}], instr: [p1, p2],
-//        reseedAt: [{beat, seed}], fps, setup}   setup: a Garden setup, loaded first; its bpm and delays win
+//        reseedAt: [{beat, seed}], fps, setup, cues: [{bar, setup}]}
+// cues load their setup at the bar (no morph glide offline; the render keeps its first bpm)   setup: a Garden setup, loaded first; its bpm and delays win
 import { Garden } from "./garden.js";
 import { createChain } from "./player.js";
 import { makeRandom } from "./lsys.js";
@@ -44,6 +45,7 @@ export async function renderGarden(catalog, opts = {}) {
   if (opts.arp) G.setArp(opts.arp);
   const layers = (opts.layers || []).slice().sort((a, b) => a.atBeat - b.atBeat);
   const reseeds = (opts.reseedAt || []).slice().sort((a, b) => a.beat - b.beat);
+  const cues = (opts.cues || []).map((c) => ({ beat: c.bar * 4, setup: c.setup })).sort((a, b) => a.beat - b.beat);
   const bps = bpm / 60;
   const log = [];
   let frame = 0;
@@ -55,6 +57,11 @@ export async function renderGarden(catalog, opts = {}) {
       const now = frame * dt * bps;
       while (layers.length && layers[0].atBeat <= now) { const L = layers.shift(); G.addLayer(L.seed, now); log.push({ k: "layer", t: now, seed: L.seed }); }
       while (reseeds.length && reseeds[0].beat <= now) { const r = reseeds.shift(); G.seed(r.seed); log.push({ k: "reseed", t: now, seed: r.seed }); }
+      while (cues.length && cues[0].beat <= now) {
+        const c = cues.shift(); G.fromSetup(c.setup, c.beat); G.bpm = bpm;
+        C.setBass(G.bass); C.setVoices(G.voiceParams); C.setMix(G.mix); C.setFx(G.fx); C.setDelays(G.delays);
+        log.push({ k: "cue", t: c.beat });
+      }
       for (const ev of G.step(now)) {
         const when = ev.t / bps;
         if (!ev.silent) C.playNote(ev, bpm, Math.max(when, frame * dt));

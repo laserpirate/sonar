@@ -69,6 +69,8 @@ export async function enable({ S, on, act }) {
   // the bus's level: rms and peak of the output and three bands, each 0..1 (-60 dB .. 0 dB; bands -90 .. -20 dB)
   const fbuf = new Float32Array(an.frequencyBinCount), hzPer = ctx.sampleRate / an.fftSize;
   const to01 = (db, lo, hi) => Math.max(0, Math.min(1, (db - lo) / (hi - lo)));
+  // record: the limiter's output as a MediaStream, made on first use
+  A.recordStream = () => { if (!A._rec) { A._rec = ctx.createMediaStreamDestination(); C.clip.connect(A._rec); } return A._rec.stream; };
   A.levels = () => {
     an.getFloatTimeDomainData(buf);
     let pk = 0, sq = 0; for (let i = 0; i < buf.length; i++) { const a = Math.abs(buf[i]); if (a > pk) pk = a; sq += buf[i] * buf[i]; }

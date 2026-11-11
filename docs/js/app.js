@@ -353,6 +353,7 @@ window.addEventListener("keydown", (e) => {
     ArrowLeft: () => act.preset(-1), ArrowRight: () => act.preset(1),
     ArrowUp: () => act.bpm(S.bpm + 2), ArrowDown: () => act.bpm(S.bpm - 2),
     "[": () => act.setupStep(-1), "]": () => act.setupStep(1),
+    g: () => act.cueGo?.(), G: () => act.cueBack?.(),
   };
   if (S.scoreKey && S.scoreKey(k)) { e.preventDefault(); return; } // ?score=1 only
   const f = map[k];
@@ -695,7 +696,7 @@ buttons(pMore, [
 ]);
 const keysBox = document.createElement("div");
 keysBox.id = "keys";
-const KEY_ROWS = [["Space", "play"], ["N", "next gen"], ["R", "reseed (new seed, new plants)"], ["L", "+ loop: a seeded 4 bar layer from the next bar"], ["C", "clear loops"], ["Shift+R", "reset the plants"], ["A", "arp mode"], ["Up Down", "bpm"], ["1 2 Tab", "plant"], ["Left Right", "preset"], ["M", "norns / wall"], ["B", "blackout"], ["Esc hold 1 s", "panic"], ["H", "hide controls"], ["F", "full screen"], ["W S D", "kodama phase (?kodama=1)"], ["E", "engine"], ["[ ]", "setup"]];
+const KEY_ROWS = [["Space", "play"], ["N", "next gen"], ["R", "reseed (new seed, new plants)"], ["L", "+ loop: a seeded 4 bar layer from the next bar"], ["C", "clear loops"], ["Shift+R", "reset the plants"], ["A", "arp mode"], ["Up Down", "bpm"], ["1 2 Tab", "plant"], ["Left Right", "preset"], ["M", "norns / wall"], ["B", "blackout"], ["Esc hold 1 s", "panic"], ["H", "hide controls"], ["F", "full screen"], ["W S D", "kodama phase (?kodama=1)"], ["E", "engine"], ["[ ]", "setup"], ["G, Shift+G", "cue go, back"]];
 const keysTable = document.createElement("table");
 for (const [k, d] of KEY_ROWS) { const tr = keysTable.insertRow(); tr.insertCell().textContent = k; tr.insertCell().textContent = d; }
 keysBox.appendChild(keysTable);
@@ -763,6 +764,115 @@ onRefresh(() => {
   const t = (bus.on ? `sent ${bus.sent.note} notes, ${bus.sent.beat} beats` : "bus off") + (S.vanaIn ? ` · vana ${S.vana.rx} in` + (S.vana.note ? `; ${S.vana.note}` : "") : "");
   if (busNote.textContent !== t) busNote.textContent = t;
 });
+
+// ------------------------------------------------------------------ Tier 8: macros, record, cue list (each off until touched)
+// macros: one control moves several parameters through a curve; sent on the bus; MIDI-mappable like any slider
+const curve = { lin: (v) => v, sqrt: (v) => Math.sqrt(v), sq: (v) => v * v };
+const MACROS = {
+  weather: [
+    ["reverb", "sqrt", (x) => act.fx({ reverb: { amount: 0.6 * x } })],
+    ["wind", "sq", (x) => act.fx({ wind: { level: 0.4 * x } })],
+    ["wind tone", "lin", (x) => act.fx({ wind: { tone: 400 + 1100 * x } })],
+    ["delay feedback", "lin", (x) => { for (const e of ARP_ENGINES) G.setDelay(e, { feedback: 0.3 + 0.4 * x }); }],
+  ],
+  depth: [
+    ["roots depth", "lin", (x) => { for (const [id, R] of Object.entries(G.roots)) if (R?.archetype) G.setRoots(Number(id), { depth: 0.2 + 0.8 * x }); }],
+    ["bass level", "sqrt", (x) => G.setBass({ level: 0.3 + 0.7 * x })],
+    ["drone", "sq", (x) => G.setBass({ drone: 0.5 * x })],
+  ],
+  motion: [
+    ["bpm", "lin", (x) => act.bpm(60 + 80 * x)],
+    ["flourish", "sq", (x) => G.setFlourish(0.6 * x)],
+    ["arp gate", "lin", (x) => { for (const e of ARP_ENGINES) G.setArp({ gate: Math.round(30 + 60 * x) }, e); }],
+  ],
+  density: [
+    ["forest density", "lin", (x) => G.setForest({ density: 0.2 + 0.8 * x })],
+    ["plant density", "sqrt", (x) => { for (let id = 1; id <= G.plants.length; id++) G.setPlantOpt(id, { density: 0.4 + 0.6 * x }); }],
+  ],
+};
+S.macros = { weather: 0, depth: 0, motion: 0, density: 0 };
+const setMacro = (name, v) => {
+  if (live()) return;
+  S.macros[name] = Math.max(0, Math.min(1, v));
+  for (const [, c, f] of MACROS[name]) f(curve[c](S.macros[name]));
+  bus.macro(name, S.macros[name]);
+  emit("state", S);
+};
+act.macro = setMacro;
+group(pMore, "macros");
+for (const name of Object.keys(MACROS)) slider(pMore, { id: "r-macro-" + name, label: name, label2: "macro " + name, min: 0, max: 1, step: 0.01, get: () => S.macros[name], set: (v) => setMacro(name, v), fmt: (x) => Math.round(x * 100) + " %", random: false });
+note(pMore, Object.entries(MACROS).map(([n, l]) => `${n}: ${l.map((x) => x[0]).join(", ")}`).join(" · "), "macro-note");
+
+// record: the output (and optionally the stage) to a file, the setup beside it
+group(pMore, "record");
+const stampNow = () => { const d = new Date(), p = (n) => String(n).padStart(2, "0"); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`; };
+const pickMime = (list) => list.find((m) => typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(m)) || "";
+const recNote = note(pMore, "", "rec-note");
+let rec = null;
+function recordToggle(video) {
+  if (rec) { rec.r.stop(); return; }
+  if (!S.audio?.recordStream || typeof MediaRecorder === "undefined") { recNote.textContent = typeof MediaRecorder === "undefined" ? "no MediaRecorder in this browser" : "enable first"; return; }
+  const audio = S.audio.recordStream();
+  const stream = video ? new MediaStream([...$("c").captureStream(30).getVideoTracks(), ...audio.getAudioTracks()]) : audio;
+  const mime = video ? pickMime(["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"]) : pickMime(["audio/webm;codecs=opus", "audio/webm"]);
+  const r = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined), chunks = [], stamp = stampNow(), setup = G.toSetup(), t0 = performance.now();
+  r.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+  r.onstop = () => {
+    const kind = video ? "video" : "take", blob = new Blob(chunks, { type: mime || "audio/webm" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `sonar_${kind}_${stamp}_v01.webm`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    download(`sonar_${kind}_${stamp}_setup_v01.json`, JSON.stringify(setup));
+    recNote.textContent = `saved sonar_${kind}_${stamp}_v01.webm, ${(blob.size / 1e6).toFixed(2)} MB, ${((performance.now() - t0) / 1000).toFixed(1)} s`;
+    rec = null; refreshAll();
+  };
+  r.start(1000);
+  rec = { r, t0, video };
+  recNote.textContent = "recording";
+}
+buttons(pMore, [
+  { id: "b-rec", label: "rec", title: "record the output to a .webm, with the setup as .json", fire: () => recordToggle(false), on: () => !!rec && !rec.video },
+  { id: "b-rec-video", label: "rec video", title: "the stage and the output to a .webm", fire: () => recordToggle(true), on: () => !!rec && rec.video },
+]);
+onRefresh(() => { if (rec) { const t = `recording ${((performance.now() - rec.t0) / 1000).toFixed(0)} s`; if (recNote.textContent !== t) recNote.textContent = t; } });
+
+// cue list: setups pinned to bars, each with its morph; run plays it, go and back step it
+const CUE_KEY = "sonar.cues.v1";
+let cues = [];
+try { const c = JSON.parse(localStorage.getItem(CUE_KEY) || "[]"); if (Array.isArray(c)) cues = c.filter((x) => x && Number.isFinite(x.bar) && x.setup).slice(0, 64); } catch {}
+const saveCues = () => { try { localStorage.setItem(CUE_KEY, JSON.stringify(cues)); } catch {} };
+S.cueRun = false; S.cueIx = -1;
+let cueBar0 = 0;
+group(pSetups, "cues");
+const cueBar = mkField("n-cue-bar", "at bar", Object.assign(document.createElement("input"), { type: "number", min: 0, max: 9999, step: 1, value: 0 }));
+const cueList = note(pSetups, "", "cue-list");
+const showCues = () => { cueList.textContent = cues.length ? cues.map((c, i) => `${i === S.cueIx ? "> " : ""}${i + 1} bar ${c.bar}${c.morph ? ` morph ${c.morph}` : ""} ${setupLabel(c.setup, "")}`.trim()).join(" · ") : "no cues"; };
+const cueGo = (dir) => {
+  if (!cues.length) return;
+  S.cueIx = Math.max(0, Math.min(cues.length - 1, S.cueIx + dir));
+  const c = cues[S.cueIx];
+  act.loadSetup(c.setup, { bars: c.morph });
+  showCues();
+};
+act.cueGo = () => cueGo(1);
+act.cueBack = () => cueGo(-1);
+act.cues = (list) => { if (list) { cues = list.slice(0, 64).sort((a, b) => a.bar - b.bar); saveCues(); showCues(); } return cues; };
+let cueClear = false;
+buttons(pSetups, [
+  { id: "b-cue-add", label: "add cue", noMap: true, fire: () => { const bar = Math.max(0, Math.round(Number(cueBar.value) || 0)); cues = cues.filter((c) => c.bar !== bar); cues.push({ bar, morph: S.morph, setup: G.toSetup() }); cues.sort((a, b) => a.bar - b.bar); saveCues(); showCues(); cueBar.value = bar + 8; } },
+  { id: "b-cue-run", label: "run", title: "play the cue list from the next bar", fire: () => { S.cueRun = !S.cueRun; if (S.cueRun) { cueBar0 = Math.ceil(nowBeats() / 4); S.cueIx = -1; if (!S.playing) act.play(true); } showCues(); }, on: () => S.cueRun },
+  { id: "b-cue-go", label: "go", title: "G: the next cue", fire: () => cueGo(1) },
+  { id: "b-cue-back", label: "back", title: "Shift+G: the cue before", fire: () => cueGo(-1) },
+]);
+buttons(pSetups, [
+  { id: "b-cue-clear", label: "clear cues", noMap: true, fire: () => { const b = $("b-cue-clear"); if (!cueClear) { cueClear = true; b.textContent = "clear cues?"; setTimeout(() => { cueClear = false; b.textContent = "clear cues"; }, 3000); return; } cueClear = false; b.textContent = "clear cues"; cues = []; S.cueIx = -1; saveCues(); showCues(); } },
+  { id: "b-cue-export", label: "export cues", noMap: true, fire: () => download("sonar_cues_v01.json", JSON.stringify({ format: "sonar cues", v: 1, cues }, null, 1)) },
+]);
+showCues();
+setInterval(() => {
+  if (!S.cueRun || !cues.length || live()) return;
+  // armed half a beat early: loadSetup lands on the next bar line, which is then the cue's own bar
+  const b = nowBeats() + 0.5;
+  while (S.cueIx + 1 < cues.length && (cueBar0 + cues[S.cueIx + 1].bar) * 4 <= b) { S.cueIx++; act.loadSetup(cues[S.cueIx].setup, { bars: cues[S.cueIx].morph }); showCues(); }
+}, 20);
 
 // ------------------------------------------------------------------ MIDI: bindings, learn, maps, out, clock (AV-STANDARD v02)
 // acts the page has beyond the panels' controls; bpm and angle keep v0.2.0's CC ranges
