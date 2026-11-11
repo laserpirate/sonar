@@ -200,8 +200,12 @@ Check: `node tools/score_norns_check.mjs 60 shanshui` runs the score in real tim
 
 Not verified on real hardware: the norns, SuperCollider class loading, `;install`, a MIDI controller, a projector.
 
+## License
+
+sonar is distributed under GPL-3.0 (`LICENSE`) because it derives from flora; raindrops is MIT per its readme. `docs/js/bus.js` and `docs/js/sonar-in.js` hold no flora-derived code and stand alone.
+
 ## Credits
 
-- flora by jaseknighter (MIT, `upstream/flora/LICENSE`), with its own credits: Brian Crabtree, Dan Derks, Daniel Shiffman, Eli Fieldsteel, Mark Wheeler, Tom Armitage, Tyler Etters.
+- flora by jaseknighter (GPL-3.0, `upstream/flora/LICENSE`), with its own credits: Brian Crabtree, Dan Derks, Daniel Shiffman, Eli Fieldsteel, Mark Wheeler, Tom Armitage, Tyler Etters.
 - raindrops by ambalek (MIT, declared in `upstream/raindrops/readme.md`; the repository has no separate LICENSE file).
 - Software: norns, SuperCollider, Lua, Node, Canvas 2D, Web Audio, Web MIDI, Python with numpy and scipy, ffmpeg, Playwright, Claude Code.

@@ -150,7 +150,7 @@ export class Garden {
     // layers sit at their preset's start (plant 1 side for odd serial, plant 2 side for even)
     plant.startFrom.x = this.catalog.plants[instr - 1].start_from[0] + (this._layerSerial % 2 ? -32 : 32);
     const start = Math.ceil(now / 4) * 4; // next bar line
-    const L = { id, seed, instr, plant, random, start, events: [], next: 0, loops: 0 };
+    const L = { id, serial: this._layerSerial, seed, instr, plant, random, start, events: [], next: 0, loops: 0 };
     this._record(L);
     this.layers.push(L);
     while (this.layers.length > MAX_LAYERS) this.layers.shift();
@@ -276,6 +276,37 @@ export class Garden {
     for (let k = 0; k < 2; k++) if (this.plants[k].turtle) out.push({ id: k + 1, plant: this.plants[k], geom: this.plants[k].render() });
     for (const L of this.layers) out.push({ id: L.id, layer: L, plant: L.plant, geom: L.plant.render() });
     return out;
+  }
+
+  // the wall view's geometry, computed once per generation or parameter change.
+  // No checkPlantPosition here: the stage fits the plants itself. The draw uses
+  // its own fixed random stream and leaves the turtle as it found it, so two
+  // calls on one sentence give one drawing and never advance the garden's RNG.
+  geometry() {
+    this._geom = this._geom || new Map();
+    this._rev = this._rev || 0;
+    const out = [], seen = new Set();
+    const each = (id, plant, layer) => {
+      if (!plant.turtle || !plant.lsys) return;
+      seen.add(id);
+      const t = plant.turtle;
+      const key = `${plant.lsys.sentence}|${t.todo === plant.lsys.sentence}|${t.theta}|${t.length}|${plant.initialTurtleRotation}`;
+      let c = this._geom.get(id);
+      if (!c || c.key !== key) { c = { key, geom: this._still(plant, id), rev: ++this._rev }; this._geom.set(id, c); }
+      out.push({ id, plant, layer, geom: c.geom, rev: c.rev });
+    };
+    for (let k = 0; k < this.plants.length; k++) each(k + 1, this.plants[k]);
+    for (const L of this.layers) each(L.id, L.plant, L);
+    for (const id of [...this._geom.keys()]) if (!seen.has(id)) this._geom.delete(id);
+    return out;
+  }
+  _still(plant, id) {
+    const t = plant.turtle, theta = t.theta, rnd = t.random;
+    t.random = makeRandom((this.seedValue ^ Math.imul(id, 0x9e3779b1)) >>> 0 || 1);
+    t.stack = [];
+    const g = plant.render();
+    t.theta = theta; t.random = rnd; t.stack = [];
+    return g;
   }
 
   state() {

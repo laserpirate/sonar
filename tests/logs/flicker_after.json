@@ -1,0 +1,113 @@
+{
+ "desktop_seed42:a": {
+  "frames": 30,
+  "changedMax": 0,
+  "strayMax": 0,
+  "strayFrames": 0,
+  "strayAt": [],
+  "shiftMax": 0,
+  "blank": 0,
+  "inkMin": 9793,
+  "inkMax": 9793,
+  "nudges": 0,
+  "thetaMoves": 0,
+  "hudJumps": 0
+ },
+ "desktop_seed42:b": {
+  "frames": 60,
+  "changedMax": 6876,
+  "strayMax": 0,
+  "strayFrames": 0,
+  "strayAt": [],
+  "shiftMax": 0,
+  "blank": 0,
+  "inkMin": 9965,
+  "inkMax": 10585,
+  "nudges": 0,
+  "thetaMoves": 0,
+  "hudJumps": 0
+ },
+ "desktop_seed42:c": {
+  "inkRightAfterResize": 10045
+ },
+ "desktop_dpr2_seed7:a": {
+  "frames": 30,
+  "changedMax": 0,
+  "strayMax": 0,
+  "strayFrames": 0,
+  "strayAt": [],
+  "shiftMax": 0,
+  "blank": 0,
+  "inkMin": 32958,
+  "inkMax": 32958,
+  "nudges": 0,
+  "thetaMoves": 0,
+  "hudJumps": 0
+ },
+ "desktop_dpr2_seed7:b": {
+  "frames": 60,
+  "changedMax": 36101,
+  "strayMax": 0,
+  "strayFrames": 0,
+  "strayAt": [],
+  "shiftMax": 0,
+  "blank": 0,
+  "inkMin": 34304,
+  "inkMax": 41897,
+  "nudges": 0,
+  "thetaMoves": 0,
+  "hudJumps": 0
+ },
+ "desktop_dpr2_seed7:c": {
+  "inkRightAfterResize": 41802
+ },
+ "phone_seed42:a": {
+  "frames": 30,
+  "changedMax": 0,
+  "strayMax": 0,
+  "strayFrames": 0,
+  "strayAt": [],
+  "shiftMax": 0,
+  "blank": 0,
+  "inkMin": 14271,
+  "inkMax": 14271,
+  "nudges": 0,
+  "thetaMoves": 0,
+  "hudJumps": 0
+ },
+ "phone_seed42:b": {
+  "frames": 60,
+  "changedMax": 11749,
+  "strayMax": 0,
+  "strayFrames": 0,
+  "strayAt": [],
+  "shiftMax": 0,
+  "blank": 0,
+  "inkMin": 14945,
+  "inkMax": 16676,
+  "nudges": 0,
+  "thetaMoves": 0,
+  "hudJumps": 0
+ },
+ "phone_seed42:c": {
+  "inkRightAfterResize": 14936
+ },
+ "sway:b": {
+  "maxStepPx": 0.139,
+  "totalPx": 5.07
+ },
+ "sway:a": {
+  "frames": 20,
+  "changedMax": 0,
+  "strayMax": 0,
+  "strayFrames": 0,
+  "strayAt": [],
+  "shiftMax": 0,
+  "blank": 0,
+  "inkMin": 9950,
+  "inkMax": 9950,
+  "nudges": 0,
+  "thetaMoves": 0,
+  "hudJumps": 0
+ }
+}

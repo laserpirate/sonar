@@ -1,0 +1,114 @@
+{
+ "desktop_seed42:a": {
+  "frames": 30,
+  "changedMax": 0,
+  "strayMax": 0,
+  "strayFrames": 0,
+  "strayAt": [],
+  "shiftMax": 0,
+  "blank": 0,
+  "inkMin": 2018,
+  "inkMax": 2018,
+  "nudges": 0,
+  "thetaMoves": 0,
+  "hudJumps": 0
+ },
+ "desktop_seed42:b": {
+  "frames": 60,
+  "changedMax": 4900,
+  "strayMax": 3505,
+  "strayFrames": 9,
+  "strayAt": [
+   "0:1973/184 box 823,213,956,516 d93",
+   "1:3493/184 box 279,224,957,468 d126",
+   "2:3491/184 box 279,220,961,464 d126",
+   "3:3499/184 box 279,216,965,462 d126",
+   "5:3505/184 box 279,211,969,458 d126",
+   "6:1878/184 box 849,219,973,454 d93",
+   "7:1652/184 box 853,215,977,450 d93",
+   "9:1659/184 box 857,212,981,446 d93",
+   "10:1010/184 box 861,208,981,430 d93"
+  ],
+  "shiftMax": 35.255,
+  "blank": 0,
+  "inkMin": 2065,
+  "inkMax": 2880,
+  "nudges": 14,
+  "thetaMoves": 0,
+  "hudJumps": 0
+ },
+ "desktop_seed42:c": {
+  "inkRightAfterResize": 0
+ },
+ "desktop_dpr2_seed7:a": {
+  "frames": 30,
+  "changedMax": 0,
+  "strayMax": 0,
+  "strayFrames": 0,
+  "strayAt": [],
+  "shiftMax": 0,
+  "blank": 0,
+  "inkMin": 6478,
+  "inkMax": 6478,
+  "nudges": 0,
+  "thetaMoves": 0,
+  "hudJumps": 0
+ },
+ "desktop_dpr2_seed7:b": {
+  "frames": 60,
+  "changedMax": 9198,
+  "strayMax": 0,
+  "strayFrames": 0,
+  "strayAt": [],
+  "shiftMax": 0,
+  "blank": 0,
+  "inkMin": 6478,
+  "inkMax": 9776,
+  "nudges": 0,
+  "thetaMoves": 0,
+  "hudJumps": 0
+ },
+ "desktop_dpr2_seed7:c": {
+  "inkRightAfterResize": 0
+ },
+ "phone_seed42:a": {
+  "frames": 30,
+  "changedMax": 0,
+  "strayMax": 0,
+  "strayFrames": 0,
+  "strayAt": [],
+  "shiftMax": 0,
+  "blank": 0,
+  "inkMin": 1662,
+  "inkMax": 1662,
+  "nudges": 0,
+  "thetaMoves": 0,
+  "hudJumps": 0
+ },
+ "phone_seed42:b": {
+  "frames": 60,
+  "changedMax": 3352,
+  "strayMax": 2467,
+  "strayFrames": 8,
+  "strayAt": [
+   "0:1253/473 box 531,347,621,548 d92",
+   "2:2466/473 box 130,338,624,511 d126",
+   "3:2465/473 box 130,335,626,509 d126",
+   "4:2467/473 box 130,332,629,506 d126",
+   "6:1302/473 box 542,335,632,503 d93",
+   "7:1305/473 box 545,333,635,500 d92",
+   "8:1301/473 box 548,330,638,497 d93",
+   "9:659/473 box 551,327,638,489 d93"
+  ],
+  "shiftMax": 36.449,
+  "blank": 0,
+  "inkMin": 1479,
+  "inkMax": 2159,
+  "nudges": 12,
+  "thetaMoves": 0,
+  "hudJumps": 0
+ },
+ "phone_seed42:c": {
+  "inkRightAfterResize": 0
+ }
+}

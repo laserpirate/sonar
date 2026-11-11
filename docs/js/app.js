@@ -3,6 +3,7 @@
 import { Plant, LSystem, Turtle, makeRandom, DRAW } from "./lsys.js";
 import { Garden, LOOP_BARS, MAX_LAYERS, SCALE_NAMES, ARP_MODES, ARP_RATES, noteName } from "./garden.js";
 import { OscWs } from "./osc-ws.js";
+import { Stage } from "./stage.js";
 
 const q = new URLSearchParams(location.search);
 const catalog = await (await fetch(new URL("./catalog.json", import.meta.url))).json();
@@ -179,6 +180,7 @@ export const act = {
     if (live()) link.send("/sonar/plant", [n]);
     S.active = n; G.active = n; emit("state", S);
   },
+  plantNext() { act.plant((S.active % G.plants.length) + 1); },
   preset(dir) {
     const k = S.active - 1;
     if (live()) { const n = ((S.instr[k] - 1 + dir + NPRESETS) % NPRESETS) + 1; S.instr[k] = n; link.send(`/param/plant${S.active}_instructions`, [n]); return; }
@@ -238,8 +240,8 @@ window.addEventListener("keydown", (e) => {
     r: () => (live() ? act.reset() : act.reseed()), R: () => act.reset(), // live: the device has no seed, R resets
     l: () => act.addLayer(), L: () => act.addLayer(), c: () => act.clearLayers(), C: () => act.clearLayers(),
     a: () => act.arpCycle(), A: () => act.arpCycle(),
-    "1": () => act.plant(1), "2": () => act.plant(2), m: () => act.mode(), M: () => act.mode(),
-    h: () => hud.classList.toggle("hidden"), H: () => hud.classList.toggle("hidden"),
+    "1": () => act.plant(1), "2": () => act.plant(2), Tab: () => act.plantNext(), m: () => act.mode(), M: () => act.mode(),
+    h: () => toggleHud(), H: () => toggleHud(),
     f: () => fullscreen(), F: () => fullscreen(), "?": () => keysBox.classList.toggle("show"),
     ArrowLeft: () => act.preset(-1), ArrowRight: () => act.preset(1),
     ArrowUp: () => act.bpm(S.bpm + 2), ArrowDown: () => act.bpm(S.bpm - 2),
@@ -332,23 +334,33 @@ const lastGood = document.createElement("canvas");
 let lastGoodAt = 0;
 let drawn = []; // [{id, geom, layer?}] from the last render
 
+const stage = new Stage(canvas);
+const stageEl = $("stage");
+window.__stage = stage;
 function resize() {
-  const W = Math.max(1, window.innerWidth), H = Math.max(1, window.innerHeight);
+  const r = stageEl.getBoundingClientRect();
+  const W = Math.max(1, Math.round(r.width)), H = Math.max(1, Math.round(r.height));
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  let w, h, cssW, cssH;
   if (S.mode === "norns") {
     const s = Math.max(1, Math.floor(Math.min(W / DRAW.w, H / DRAW.h)));
-    canvas.width = Math.round(DRAW.w * s * dpr); canvas.height = Math.round(DRAW.h * s * dpr);
-    canvas.style.width = DRAW.w * s + "px"; canvas.style.height = DRAW.h * s + "px";
+    w = Math.round(DRAW.w * s * dpr); h = Math.round(DRAW.h * s * dpr); cssW = DRAW.w * s; cssH = DRAW.h * s;
     S.scale = s;
   } else {
-    canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
-    canvas.style.width = W + "px"; canvas.style.height = H + "px";
+    w = Math.round(W * dpr); h = Math.round(H * dpr); cssW = W; cssH = H;
     S.scale = null;
   }
-  lastGood.width = Math.max(1, canvas.width); lastGood.height = Math.max(1, canvas.height);
+  canvas.style.width = cssW + "px"; canvas.style.height = cssH + "px";
+  // only a real size change touches the canvas (assigning width clears it), and it redraws in the same task,
+  // so the iOS address bar showing and hiding never leaves a blank frame
+  if (stage.setSize(w, h, dpr)) {
+    lastGood.width = Math.max(1, w); lastGood.height = Math.max(1, h);
+    if (!S.panic) { try { paint(performance.now()); } catch (e) { S.errors++; } }
+  }
 }
+function toggleHud() { hud.classList.toggle("hidden"); resize(); }
 window.addEventListener("resize", resize);
-resize();
+if (window.ResizeObserver) new ResizeObserver(resize).observe(stageEl);
 
 // norns screen levels 0..15 shown with a light gamma so level 1 and 3 read on a projector
 const level = (l) => { const v = Math.round(255 * Math.pow(l / 15, 0.5)); return `rgb(${v},${v},${v})`; };
@@ -376,54 +388,35 @@ function drawNorns() {
   ctx.drawImage(small, 0, 0, canvas.width, canvas.height);
 }
 
-function drawWall() {
+const reduceMotion = !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches);
+function stageItems() {
+  return G.geometry().map((d) => ({ ...d, group: d.layer ? 2 - (d.layer.serial % 2) : d.id, dim: d.layer ? 0.55 : 0, scale: d.layer ? 0.8 : 1 }));
+}
+function drawWall(t) {
   const W = canvas.width, H = canvas.height;
-  ctx.fillStyle = "#07090e"; ctx.fillRect(0, 0, W, H);
-  const hudH = hud.classList.contains("hidden") ? 0 : hud.offsetHeight * (W / window.innerWidth);
-  const AH = H - hudH;
-  const s = Math.min(W / DRAW.w, AH / DRAW.h) * 0.94;
-  const ox = (W - DRAW.w * s) / 2, oy = (AH - DRAW.h * s) / 2;
-  const X = (x) => ox + x * s, Y = (y) => oy + y * s;
-  const lw = Math.max(1, s * 0.12);
-  ctx.lineCap = "round";
+  if (S.playing && !reduceMotion) stage.swayT += Math.min(100, Math.max(0, t - (S.swayLast ?? t)));
+  S.swayLast = t;
+  stage.swayAmp = reduceMotion ? 0 : (S.sway ?? 0.012);
+  stage.update(stageItems(), t);
+  stage.draw(S.active, lit);
+  const lw = stage.lineWidth();
   if (S.flags.shanshui && S.flood > 0) {
-    const wy = Y(DRAW.h * (1 - S.flood));
+    const wy = H * (1 - S.flood);
     ctx.fillStyle = "rgba(46, 74, 140, 0.35)"; ctx.fillRect(0, wy, W, H - wy);
     ctx.strokeStyle = "#9FC8F0"; ctx.lineWidth = lw; ctx.beginPath(); ctx.moveTo(0, wy); ctx.lineTo(W, wy); ctx.stroke();
   }
-  for (const d of drawn) {
-    const g = d.geom;
-    const isLayer = d.id > 2;
-    ctx.strokeStyle = isLayer ? "rgba(62, 70, 107, 0.55)" : d.id === S.active ? "#2E4A8C" : "#3e466b";
-    ctx.lineWidth = isLayer ? lw * 0.7 : lw;
-    ctx.beginPath();
-    for (const sg of g.segments) { ctx.moveTo(X(sg.x1), Y(sg.y1)); ctx.lineTo(X(sg.x2), Y(sg.y2)); }
-    ctx.stroke();
-    const L = lit.get(d.id);
-    if (L && L.size) {
-      ctx.lineWidth = lw * 2.2;
-      for (const sg of g.segments) {
-        const b = L.get(sg.i);
-        if (!b) continue;
-        ctx.strokeStyle = `rgba(159, 200, 240, ${b.toFixed(3)})`;
-        ctx.beginPath(); ctx.moveTo(X(sg.x1), Y(sg.y1)); ctx.lineTo(X(sg.x2), Y(sg.y2)); ctx.stroke();
-        ctx.fillStyle = `rgba(159, 200, 240, ${b.toFixed(3)})`;
-        ctx.beginPath(); ctx.arc(X(sg.x2), Y(sg.y2), lw * 2.4 * b + lw, 0, Math.PI * 2); ctx.fill();
-      }
-    }
-  }
-  // arpeggiator: a pulse on the beat line at the bottom of the drawing
+  // arpeggiator: a pulse along the bottom edge
   if (G.arp.mode !== "off" && S.lastNote?.arp) {
     const age = (performance.now() - (S.lastArpAt || 0)) / 1000;
     const a = Math.max(0, 1 - age * 4);
-    if (a > 0) { ctx.fillStyle = `rgba(159, 200, 240, ${(a * 0.6).toFixed(3)})`; ctx.fillRect(ox, oy + DRAW.h * s + lw * 2, DRAW.w * s * Math.min(1, (S.lastNote.note % 24) / 24), lw); }
+    if (a > 0) { ctx.fillStyle = `rgba(159, 200, 240, ${(a * 0.6).toFixed(3)})`; ctx.fillRect(0, H - lw * 2, W * Math.min(1, (S.lastNote.note % 24) / 24), lw); }
   }
   if (S.flags.shanshui && S.weather > 0) {
     ctx.fillStyle = `rgba(159, 200, 240, ${(S.weather * 0.45).toFixed(3)})`;
     ctx.fillRect(0, 0, W, H);
   }
 }
-on("note", (n) => { if (n.arp) S.lastArpAt = performance.now(); });
+on("note", (n) => { if (n.arp) S.lastArpAt = performance.now(); else if (n.idx > 0) stage.addMark(n.plant, n.idx); });
 
 function decay(dt) {
   const f = Math.exp(-dt / 0.45);
@@ -432,6 +425,19 @@ function decay(dt) {
 
 let lastT = performance.now();
 let frameIx = 0;
+function paint(t) {
+  if (S.mode === "norns") {
+    // the device view keeps flora's redraw: check_plant_position, then the plants, at 15 fps
+    if (frameIx++ % 4 === 0 || !drawn.length) {
+      drawn = G.render();
+      for (const d of drawn) if (d.id <= 2) S.segments[d.id] = d.geom.segments.length;
+    }
+    drawNorns();
+  } else {
+    drawWall(t);
+    for (const d of stage.items) if (d.id <= 2) S.segments[d.id] = d.geom.segments.length;
+  }
+}
 function frame(t) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.25, (t - lastT) / 1000); lastT = t;
@@ -441,13 +447,8 @@ function frame(t) {
     return;
   }
   try {
-    // flora redraws at 15 fps: check_plant_position, then draw the plants
-    if (frameIx++ % 4 === 0 || !drawn.length) {
-      drawn = G.render();
-      for (const d of drawn) if (d.id <= 2) S.segments[d.id] = d.geom.segments.length;
-    }
     decay(dt);
-    if (S.mode === "norns") drawNorns(); else drawWall();
+    paint(t);
     S.frames++;
     if (t - lastGoodAt > 1000 && canvas.width > 0 && canvas.height > 0) { lastGood.getContext("2d").drawImage(canvas, 0, 0); lastGoodAt = t; }
   } catch (e) {
@@ -457,8 +458,17 @@ function frame(t) {
   }
 }
 
+// tap or click selects the plant under it
+canvas.addEventListener("click", (e) => {
+  if (S.mode === "norns") return;
+  const r = canvas.getBoundingClientRect();
+  const id = stage.pick((e.clientX - r.left) * (canvas.width / r.width), (e.clientY - r.top) * (canvas.height / r.height));
+  if (id) act.plant(id);
+});
+
 // ------------------------------------------------------------------ start
 if (wsUrl) S.source = "connecting"; // until the bridge answers, show the sim garden still
+resize();
 requestAnimationFrame(frame);
 
 // Enable: audio + MIDI, only on click (AV-STANDARD rule 2)

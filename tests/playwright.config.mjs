@@ -14,7 +14,7 @@ export default defineConfig({
     headless: true,
     launchOptions: { args: ["--autoplay-policy=no-user-gesture-required"] },
     viewport: { width: 1280, height: 720 },
-    baseURL: "http://127.0.0.1:8080/",
+    baseURL: process.env.SONAR_BASE || "http://127.0.0.1:8080/",
   },
   webServer: {
     command: "node ../tools/serve.mjs --port 8080",
