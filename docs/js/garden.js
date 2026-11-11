@@ -43,7 +43,12 @@ export function scaleOfLength(root, scale, length = 24) {
 export const ARP_MODES = ["off", "up", "down", "updown", "random"];
 export const ARP_RATES = { "1/4": 1, "1/8": 0.5, "1/8t": 1 / 3, "1/16": 0.25 };
 export const ARP_ENGINES = ["saw", "rain"];
-const newArp = (seed) => ({ mode: "off", rate: "1/8", octaves: 1, size: 4, gate: 100, steps: 16, pulses: 16, rotation: 0, buf: [], ix: 0, nextT: null, pos: 0, random: makeRandom(seed) });
+const ARP_DEFAULT = () => ({ mode: "off", rate: "1/8", octaves: 1, size: 4, gate: 100, steps: 16, pulses: 16, rotation: 0 });
+const ARP_SEEDS = { saw: 0x9e37, rain: 0x7f4a };
+const newArp = (seed) => ({ ...ARP_DEFAULT(), buf: [], ix: 0, nextT: null, pos: 0, random: makeRandom(seed) });
+export const SETUP_VERSION = 1;
+const num = (v, lo, hi, d) => { const n = Number(v); return v !== null && v !== undefined && Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : d; };
+const voiceId = (v) => (typeof v === "string" && /^[a-z0-9_-]{1,24}$/.test(v) ? v : null);
 export const DELAY_DEFAULT = () => ({ amount: 0, div: "d1/8", feedback: 0.45, lowpass: 2400, pingpong: false });
 // Euclidean rhythm: is step i of `steps` a pulse, with `pulses` spread evenly and a rotation
 export const euclidHit = (i, steps, pulses, rotation = 0) => {
@@ -76,11 +81,12 @@ export class Garden {
     this.N = this.catalog.plants.length;
     this.key = { root: this.D.root_note, scale: this.D.scale_name || "dorian" };
     this.notes = scaleOfLength(this.key.root, this.key.scale, this.D.scale_length || 24);
+    this.bpm = opts.bpm ?? 90;
     this.pitch = 0;            // semitones
     this.growth = 0;           // bars per generation step, 0 = off
     this.growthDir = 1;
     this.nextGrowthBar = null;
-    this.arps = { saw: newArp(0x9e37), rain: newArp(0x7f4a) };
+    this.arps = { saw: newArp(ARP_SEEDS.saw), rain: newArp(ARP_SEEDS.rain) };
     this.delays = { saw: DELAY_DEFAULT(), rain: DELAY_DEFAULT() };
     this.engineMode = "saw";   // v0.2.0's global engine: saw, rain or both
     this.routes = {};          // plant id -> voice id, overrides engineMode
@@ -104,7 +110,9 @@ export class Garden {
     const p1 = instr?.[0] || presetOfSeed(this.seedValue, this.N);
     const p2 = instr?.[1] || presetOfSeed(Math.floor(this.seedValue / 7) + 3, this.N);
     this.instr = [p1, p2];
-    this.plants = [new Plant(1, { random: this.random, defaults: this.D }), new Plant(2, { random: this.random, defaults: this.D })];
+    // the array keeps its identity: the page holds a reference to it
+    this.plants = this.plants || [];
+    this.plants.splice(0, this.plants.length, new Plant(1, { random: this.random, defaults: this.D }), new Plant(2, { random: this.random, defaults: this.D }));
     this.seqs = [null, null];
     this.pending = [null, null];
     this.t0 = this.t0 ?? 0;
@@ -382,6 +390,100 @@ export class Garden {
     const g = plant.render();
     t.theta = theta; t.random = rnd; t.stack = [];
     return g;
+  }
+
+  // ---- setups ---------------------------------------------------------------
+  // everything needed to play this garden again: exact sentences and the random stream's position
+  toSetup() {
+    const arp = (A) => ({ mode: A.mode, rate: A.rate, octaves: A.octaves, size: A.size, gate: A.gate, steps: A.steps, pulses: A.pulses, rotation: A.rotation });
+    return {
+      v: SETUP_VERSION, seed: this.seedValue, rng: this.random.state(), bpm: this.bpm, active: this.active,
+      key: { ...this.key }, pitch: this.pitch, growth: this.growth, engineMode: this.engineMode, layerRoute: this.layerRoute, flourish: this.flourish,
+      plants: this.plants.map((p, k) => ({ instr: this.instr[k], gen: p.currentGeneration, lgen: p.lsys.generation, sentence: p.sentence, randomAngles: p.lsys.randomAngles.slice(), angle: p.angle, length: p.userScale ?? 1, engine: this.routes[k + 1] ?? null })),
+      layers: this.layers.map((L) => ({ seed: L.seed, serial: L.serial, phase: L.start % LOOP_BEATS, engine: this.routes[L.id] ?? null })),
+      layerSerial: this._layerSerial || 0,
+      arps: { saw: arp(this.arps.saw), rain: arp(this.arps.rain) },
+      delays: { saw: { ...this.delays.saw }, rain: { ...this.delays.rain } },
+      sim: { ...this.simOpts }, midi: this.midiRef ?? null,
+    };
+  }
+  // a setup can come from a link or a file: check all of it before anything changes
+  _cleanSetup(s) {
+    if (!s || typeof s !== "object" || s.v !== SETUP_VERSION) throw new Error("not a sonar setup");
+    if (!Array.isArray(s.plants) || s.plants.length < 2) throw new Error("setup has no plants");
+    const plants = s.plants.slice(0, 2).map((p) => {
+      const instr = Math.round(Number(p?.instr));
+      if (!(instr >= 1 && instr <= this.N)) throw new Error("setup names an unknown plant");
+      return {
+        instr, gen: num(p.gen, 0, 64, undefined), lgen: num(p.lgen, -64, 64, undefined),
+        sentence: typeof p.sentence === "string" && p.sentence.length <= 20000 ? p.sentence : undefined,
+        randomAngles: Array.isArray(p.randomAngles) ? p.randomAngles.slice(0, 4000).map((x) => num(x, -360, 360, 0)) : [],
+        angle: num(p.angle, -3600, 3600, undefined), length: num(p.length, 0.35, 1.6, 1), engine: voiceId(p.engine),
+      };
+    });
+    const layers = (Array.isArray(s.layers) ? s.layers : []).slice(-MAX_LAYERS).map((L, i) => ({ seed: num(L?.seed, 1, 4294967295, 1), serial: Math.round(num(L?.serial, 1, 1e6, i + 1)), phase: num(L?.phase, 0, LOOP_BEATS - 1, 0), engine: voiceId(L?.engine) }));
+    const delay = (d = {}) => { const b = DELAY_DEFAULT(); return { amount: num(d.amount, 0, 1, b.amount), div: ["1/16", "1/8", "d1/8", "1/4", "1/2"].includes(d.div) ? d.div : b.div, feedback: num(d.feedback, 0, 0.85, b.feedback), lowpass: num(d.lowpass, 400, 8000, b.lowpass), pingpong: !!d.pingpong }; };
+    const sim = {};
+    for (const k of ["duration", "cfScalar"]) { const v = num(s.sim?.[k], 0, 1e6, undefined); if (v !== undefined) sim[k] = v; }
+    return {
+      seed: num(s.seed, 1, 4294967295, 1), rng: num(s.rng, 0, 4294967295, undefined), bpm: Math.round(num(s.bpm, 20, 300, 90)), active: s.active === 2 ? 2 : 1,
+      root: Math.round(num(s.key?.root, 0, 127, this.D.root_note)), scale: SCALES[s.key?.scale] ? s.key.scale : this.D.scale_name || "dorian",
+      pitch: num(s.pitch, -24, 24, 0), growth: num(s.growth, 0, 16, 0), engineMode: ["saw", "rain", "both"].includes(s.engineMode) ? s.engineMode : "saw",
+      layerRoute: voiceId(s.layerRoute), flourish: num(s.flourish, 0, 1, 0), plants, layers, layerSerial: num(s.layerSerial, 0, 1e6, undefined),
+      arps: { saw: s.arps?.saw || {}, rain: s.arps?.rain || {} }, delays: { saw: delay(s.delays?.saw), rain: delay(s.delays?.rain) }, sim,
+      midi: typeof s.midi === "string" ? s.midi.slice(0, 80) : null,
+    };
+  }
+  // load a setup from beat `now`; loop layers keep their place on the 4 bar grid
+  fromSetup(raw, now = this._now ?? 0) {
+    const s = this._cleanSetup(raw);
+    this._now = now;
+    this.layers = []; this.future = []; this.routes = {};
+    this.bpm = s.bpm; this.active = s.active; this.midiRef = s.midi;
+    this.key = { root: s.root, scale: s.scale };
+    this.notes = scaleOfLength(s.root, s.scale, this.D.scale_length || 24);
+    this.simOpts = s.sim;
+    this.seed(s.seed, s.plants.map((p) => p.instr));
+    s.plants.forEach((p, k) => {
+      const plant = this.plants[k];
+      if (p.sentence !== undefined) {
+        plant.setSentence(p.sentence);
+        plant.lsys.randomAngles = p.randomAngles;
+        plant.lsys.generation = p.lgen ?? p.gen ?? 0;
+        plant.currentGeneration = p.gen ?? 0;
+      } else if (p.gen) this.setup(k, p.instr, p.gen);
+      if (p.angle !== undefined) plant.setAngle(p.angle);
+      plant.userScale = p.length;
+      if (p.engine) this.routes[k + 1] = p.engine;
+      this.seqs[k] = this._seq(plant, this.random, now);
+      this.pending[k] = null;
+    });
+    this.pitch = s.pitch; this.growthDir = 1; this.setGrowth(s.growth);
+    this.engineMode = s.engineMode; this.layerRoute = s.layerRoute; this.flourish = s.flourish;
+    this.flourishRandom = makeRandom(0x51f3);
+    for (const e of ARP_ENGINES) {
+      const A = this.arps[e];
+      this.setArp({ ...ARP_DEFAULT(), ...s.arps[e] }, e);
+      A.size = Math.round(num(A.size, 1, 16, 4)); A.octaves = Math.round(num(A.octaves, 1, 3, 1));
+      A.buf = []; A.ix = 0; A.pos = 0; A.nextT = null; A.random = makeRandom(ARP_SEEDS[e]);
+      Object.assign(this.delays[e], s.delays[e]);
+    }
+    for (const l of s.layers) {
+      this._layerSerial = l.serial - 1;
+      const L = this.addLayer(l.seed, now);
+      const base = Math.ceil(now / 4) * 4;
+      L.start = base + ((((l.phase - base) % LOOP_BEATS) + LOOP_BEATS) % LOOP_BEATS);
+      if (now > 0 && L.start > base) {
+        // already under way: join the loop where it is rather than waiting for its top
+        L.start -= LOOP_BEATS;
+        const i = L.events.findIndex((e) => L.start + e.t >= now);
+        if (i >= 0) L.next = i; else { L.next = 0; L.loops = 1; }
+      }
+      if (l.engine) this.routes[L.id] = l.engine;
+    }
+    this._layerSerial = s.layerSerial ?? (s.layers.length ? s.layers[s.layers.length - 1].serial : 0);
+    if (s.rng !== undefined) this.random.restore(s.rng);
+    return this;
   }
 
   state() {

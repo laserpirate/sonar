@@ -4,17 +4,18 @@
 //
 // opts: {seed, seconds, sr, bpm, engine, delay, pitch, growth, key: [root, scale],
 //        arp: {mode, rate, octaves}, layers: [{seed, atBeat}], instr: [p1, p2],
-//        reseedAt: [{beat, seed}], fps}
+//        reseedAt: [{beat, seed}], fps, setup}   setup: a Garden setup, loaded first; its bpm and delays win
 import { Garden } from "./garden.js";
 import { createChain } from "./player.js";
 import { makeRandom } from "./lsys.js";
 
 export async function renderGarden(catalog, opts = {}) {
-  const seconds = opts.seconds || 60, sr = opts.sr || 48000, bpm = opts.bpm || 90, fps = opts.fps || 60;
+  const seconds = opts.seconds || 60, sr = opts.sr || 48000, bpm = opts.setup?.bpm || opts.bpm || 90, fps = opts.fps || 60;
   const ctx = new OfflineAudioContext(2, Math.ceil(sr * seconds), sr);
-  const delays = { saw: { amount: opts.delay || 0, ...(opts.delays?.saw || {}) }, rain: { amount: opts.delay || 0, ...(opts.delays?.rain || {}) } };
+  const G = new Garden({ catalog, seed: opts.seed ?? 1, instr: opts.instr, bpm });
+  if (opts.setup) G.fromSetup(opts.setup, 0);
+  const delays = opts.setup ? G.delays : { saw: { amount: opts.delay || 0, ...(opts.delays?.saw || {}) }, rain: { amount: opts.delay || 0, ...(opts.delays?.rain || {}) } };
   const C = createChain(ctx, { master: opts.master ?? 0.7, bpm, random: makeRandom(0x5a3), rand: makeRandom(0x77), delays, countSpans: true });
-  const G = new Garden({ catalog, seed: opts.seed ?? 1, instr: opts.instr });
   if (opts.engine) G.setEngineMode(opts.engine);
   if (opts.routes) for (const [id, v] of Object.entries(opts.routes)) G.setRoute(Number(id), v);
   if (opts.layerRoute) G.setLayerRoute(opts.layerRoute);

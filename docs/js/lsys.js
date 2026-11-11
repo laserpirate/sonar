@@ -47,12 +47,15 @@ export function makeRandom(seed = 1) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
   // random() -> [0,1); random(m) -> 1..m; random(m, n) -> m..n
-  return function random(m, n) {
+  const random = function random(m, n) {
     const r = next();
     if (m === undefined) return r;
     if (n === undefined) { n = m; m = 1; }
     return m + Math.floor(r * (n - m + 1));
   };
+  random.state = () => a;
+  random.restore = (x) => { a = x >>> 0; };
+  return random;
 }
 
 // ---------------------------------------------------------------- vector.lua

@@ -6,11 +6,13 @@ import { OscWs } from "./osc-ws.js";
 import { Stage } from "./stage.js";
 import { addPanel, group, slider, select, buttons, button, note, refreshAll, openPanel, togglePanel, applyDefaultPanels, controls } from "./ui.js";
 import { initGestures } from "./gestures.js";
+import { setupLabel, encodeSetup, decodeSetup, createStore, exportText, parseImport } from "./setups.js";
 
 const q = new URLSearchParams(location.search);
 const catalog = await (await fetch(new URL("./catalog.json", import.meta.url))).json();
 const D = catalog.defaults;
 const NPRESETS = catalog.plants.length;
+const factory = await fetch(new URL("./setups.json", import.meta.url)).then((r) => r.json()).catch(() => []);
 const pid = (n) => "p" + String(n).padStart(2, "0");
 const newSeed = () => ((Date.now() ^ (Math.random() * 0xffffffff)) >>> 0) % 1000000 + 1;
 
@@ -37,6 +39,8 @@ const S = {
   phase: null,
   delay: Number(q.get("delay")) || 0,
   seed: Number(q.get("seed")) || newSeed(),
+  morph: 0,
+  factoryIx: -1,
 };
 window.__sonar = S; // read by the Playwright tests
 S.blackoutOn = window.sonarBlackout.on;
@@ -49,7 +53,7 @@ window.__sonarOn = on;
 
 // ------------------------------------------------------------------ garden (sim)
 const instrArg = (q.get("p1") || q.get("p2")) ? [Number(q.get("p1")) || D.initial_plant_instructions[0], Number(q.get("p2")) || Number(q.get("p1")) || D.initial_plant_instructions[1]] : null;
-const G = new Garden({ catalog, seed: S.seed, instr: instrArg || (q.get("seed") ? null : D.initial_plant_instructions) });
+const G = new Garden({ catalog, seed: S.seed, bpm: S.bpm, instr: instrArg || (q.get("seed") ? null : D.initial_plant_instructions) });
 window.__garden = G;
 S.instr = G.instr;
 G.onGen = (g) => { S.lastGen[g.plant] = { gen: g.gen, max: g.max, instr: g.instr }; lit.get(g.plant)?.clear(); emit("gen", g); };
@@ -148,7 +152,45 @@ const live = () => S.source.startsWith("live");
 // ------------------------------------------------------------------ sim clock
 function simTick() {
   if (live() || S.panic) return;
+  if (pendingSetup && nowBeats() >= pendingSetup.at) { const p = pendingSetup; pendingSetup = null; applySetup(p.s, p.at, p.bars); }
+  if (glide) stepGlide();
   for (const ev of G.step(nowBeats())) noteEvent(ev);
+}
+
+// a setup lands on a bar line; the continuous parameters then glide for `morph` bars
+let pendingSetup = null, glide = null, glideEmit = 0;
+const glideKeys = () => [
+  [() => S.bpm, (v) => act.bpm(v)],
+  ...ARP_ENGINES.flatMap((e) => [
+    [() => G.delays[e].amount, (v) => { G.delays[e].amount = v; }],
+    [() => G.delays[e].feedback, (v) => { G.delays[e].feedback = v; }],
+    [() => G.delays[e].lowpass, (v) => { G.delays[e].lowpass = v; }],
+    [() => G.arps[e].gate, (v) => { G.arps[e].gate = Math.round(v); }],
+  ]),
+  [() => G.flourish, (v) => G.setFlourish(v)],
+  ...G.plants.flatMap((_, k) => [[() => G.plants[k].angle, (v) => G.plants[k].setAngle(v)], [() => G.plants[k].userScale ?? 1, (v) => { G.plants[k].userScale = v; }]]),
+];
+function applySetup(s, at, bars) {
+  const keys = glideKeys(), from = keys.map((k) => k[0]());
+  G.fromSetup(s, at);
+  const to = keys.map((k) => k[0]());
+  to[0] = G.bpm;
+  S.seed = G.seedValue; S.instr = G.instr; S.active = G.active;
+  for (let k = 0; k < 2; k++) S.lastGen[k + 1] = { gen: G.plants[k].currentGeneration, max: G.plants[k].maxGenerations, instr: G.instr[k] };
+  lit.clear(); noteAt.clear();
+  glide = null;
+  if (bars > 0) { keys.forEach((k, i) => k[1](from[i])); glide = { at, len: bars * 4, keys, from, to }; }
+  else act.bpm(G.bpm);
+  S.delay = G.delays.saw.amount;
+  syncUrl();
+  emit("state", S);
+}
+function stepGlide() {
+  const g = glide, f = Math.min(1, (nowBeats() - g.at) / g.len);
+  g.keys.forEach((k, i) => k[1](f >= 1 ? g.to[i] : g.from[i] + (g.to[i] - g.from[i]) * f));
+  if (f >= 1) glide = null;
+  const t = performance.now();
+  if (f >= 1 || t - glideEmit > 50) { glideEmit = t; emit("state", S); }
 }
 setInterval(simTick, 5);
 
@@ -172,6 +214,7 @@ export const act = {
   reseed(seed) {
     S.seed = G.seed(seed ?? newSeed());
     S.instr = G.instr;
+    clearShareHash();
     for (let k = 0; k < 2; k++) { S.lastGen[k + 1] = { gen: G.plants[k].currentGeneration, max: G.plants[k].maxGenerations, instr: G.instr[k] }; litOf(k + 1).clear(); }
     syncUrl();
     emit("state", S);
@@ -200,6 +243,7 @@ export const act = {
   engineCycle() { const A = S.audio; if (!A) return; A.engine = { saw: "rain", rain: "both", both: "saw" }[A.engine] || "saw"; document.getElementById("b-engine").textContent = A.engine; },
   bpm(v) {
     const b = Math.round(Math.max(20, Math.min(300, v)));
+    G.bpm = b;
     if (b === S.bpm) return;
     const nb = nowBeats(); S.bpm = b; beat0 = performance.now() - (nb / (b / 60)) * 1000; // keep beat phase
     if (live()) link.send("/param/clock_tempo", [b]);
@@ -227,9 +271,24 @@ export const act = {
   isLive: () => live(),
   setup: (k, instr, gen) => G.setup(k, instr, gen), // ?score=1 shows the score's plant
   garden: () => G,
+  // o.now: at once, without waiting for the bar line. Sim only: a live garden belongs to the norns
+  loadSetup(s, o = {}) {
+    if (live()) return false;
+    G._cleanSetup(s);
+    const bars = o.bars ?? S.morph;
+    if (o.now || !S.playing || S.panic) { pendingSetup = null; applySetup(s, nowBeats(), o.now ? 0 : bars); }
+    else pendingSetup = { s, at: Math.ceil(nowBeats() / 4) * 4, bars };
+    return true;
+  },
+  setupStep(dir) {
+    if (!factory.length) return;
+    S.factoryIx = S.factoryIx < 0 ? (dir > 0 ? 0 : factory.length - 1) : (S.factoryIx + dir + factory.length) % factory.length;
+    act.loadSetup(factory[S.factoryIx]);
+  },
 };
 window.__sonarAct = act;
 
+function clearShareHash() { try { if (location.hash.startsWith("#s=")) history.replaceState(null, "", location.pathname + location.search); } catch {} }
 function syncUrl() {
   try { const u = new URL(location.href); u.searchParams.set("seed", String(S.seed)); history.replaceState(null, "", u); } catch {}
 }
@@ -256,6 +315,7 @@ window.addEventListener("keydown", (e) => {
     f: () => fullscreen(), F: () => fullscreen(), "?": () => { openPanel("more"); keysBox.classList.toggle("show"); },
     ArrowLeft: () => act.preset(-1), ArrowRight: () => act.preset(1),
     ArrowUp: () => act.bpm(S.bpm + 2), ArrowDown: () => act.bpm(S.bpm - 2),
+    "[": () => act.setupStep(-1), "]": () => act.setupStep(1),
   };
   if (S.scoreKey && S.scoreKey(k)) { e.preventDefault(); return; } // ?score=1 only
   const f = map[k];
@@ -336,6 +396,67 @@ buttons(pPlants, [
   { id: "b-palette", label: "palette", title: "long press a plant", fire: () => act.palette(), noMap: true },
 ]);
 
+const pSetups = addPanel("setups", "setups");
+const store = createStore();
+group(pSetups, "factory");
+select(pSetups, { id: "s-factory", label: "setup", options: [[-1, "-"], ...factory.map((x, i) => [i, setupLabel(x)])], get: () => S.factoryIx, set: (i) => { S.factoryIx = i; if (i >= 0) act.loadSetup(factory[i]); }, random: false });
+buttons(pSetups, [
+  { id: "b-setup-prev", label: "prev", title: "[", label2: "setup prev", fire: () => act.setupStep(-1) },
+  { id: "b-setup-next", label: "next", title: "]", label2: "setup next", fire: () => act.setupStep(1) },
+]);
+select(pSetups, { id: "s-morph", label: "morph", options: [[0, "0 bars"], [1, "1 bar"], [2, "2 bars"], [4, "4 bars"], [8, "8 bars"]], get: () => S.morph, set: (v) => { S.morph = v; }, random: false });
+group(pSetups, "saved");
+const mkField = (id, label, el) => { const row = document.createElement("div"); row.className = "ctl"; const l = document.createElement("label"); l.textContent = label; l.htmlFor = id; el.id = id; row.append(l, el); pSetups.appendChild(row); return el; };
+const nameBox = mkField("t-setup-name", "name", Object.assign(document.createElement("input"), { type: "text", maxLength: 40, autocomplete: "off" }));
+const savedSel = mkField("s-saved", "saved", document.createElement("select"));
+const refillSaved = () => {
+  const was = savedSel.value;
+  savedSel.textContent = "";
+  for (const x of store.list()) { const o = document.createElement("option"); o.value = x.name; o.textContent = `${x.name} · ${setupLabel(x.setup, "")}`; savedSel.appendChild(o); }
+  if ([...savedSel.options].some((o) => o.value === was)) savedSel.value = was;
+};
+const setupNote = note(pSetups, "", "setup-note");
+const say = (t) => { setupNote.textContent = t; };
+const download = (name, text) => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: "application/json" })); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); };
+const safeName = (n) => n.replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 40) || "setup";
+let delArmed = null;
+buttons(pSetups, [
+  { id: "b-setup-save", label: "save", noMap: true, fire: () => { const n = nameBox.value.trim() || store.nextSlot(); store.put(n, G.toSetup()); nameBox.value = ""; refillSaved(); savedSel.value = n; say(store.persistent() ? `saved ${n}` : `saved ${n} for this page only`); } },
+  { id: "b-setup-load", label: "load", noMap: true, fire: () => { const s = store.get(savedSel.value); if (s) { try { act.loadSetup(s); say(`loaded ${savedSel.value}`); } catch (e) { say("not readable"); } } } },
+  { id: "b-setup-over", label: "overwrite", noMap: true, fire: () => { if (savedSel.value) { store.put(savedSel.value, G.toSetup()); refillSaved(); say(`saved ${savedSel.value}`); } } },
+  { id: "b-setup-del", label: "delete", noMap: true, fire: () => {
+    const b = $("b-setup-del"), n = savedSel.value;
+    if (!n) return;
+    if (delArmed !== n) { delArmed = n; b.textContent = "delete?"; setTimeout(() => { delArmed = null; b.textContent = "delete"; }, 3000); return; }
+    delArmed = null; b.textContent = "delete"; store.remove(n); refillSaved(); say(`deleted ${n}`);
+  } },
+]);
+const importBox = Object.assign(document.createElement("input"), { type: "file", accept: ".json,application/json", multiple: true, id: "f-setup-import" });
+importBox.style.display = "none"; pSetups.appendChild(importBox);
+async function importFiles(files) {
+  let n = 0;
+  try {
+    for (const f of files) for (const x of parseImport(await f.text())) { G._cleanSetup(x.setup); store.put(x.name || store.nextSlot(), x.setup); n++; }
+    say(`imported ${n}`);
+  } catch (e) { say(`imported ${n}, then a file was not readable`); }
+  refillSaved();
+}
+importBox.onchange = () => { importFiles([...importBox.files]); importBox.value = ""; };
+window.addEventListener("dragover", (e) => { if ([...(e.dataTransfer?.types || [])].includes("Files")) e.preventDefault(); });
+window.addEventListener("drop", (e) => { if (e.dataTransfer?.files?.length) { e.preventDefault(); importFiles([...e.dataTransfer.files]); } });
+const linkBox = mkField("t-setup-link", "link", Object.assign(document.createElement("input"), { type: "text", readOnly: true }));
+buttons(pSetups, [
+  { id: "b-setup-export", label: "export", noMap: true, fire: () => { const x = store.list().find((y) => y.name === savedSel.value); if (x) download(`sonar_setup_${safeName(x.name)}_v01.json`, exportText([x])); } },
+  { id: "b-setup-all", label: "export all", noMap: true, fire: () => download("sonar_setups_all_v01.json", exportText(store.list())) },
+  { id: "b-setup-import", label: "import", noMap: true, fire: () => importBox.click() },
+  { id: "b-setup-share", label: "share link", noMap: true, fire: async () => {
+    const url = location.origin + location.pathname + "#s=" + await encodeSetup(G.toSetup());
+    linkBox.value = url;
+    try { await navigator.clipboard.writeText(url); say("link copied"); } catch { say("link ready"); }
+  } },
+]);
+refillSaved();
+
 const pMore = addPanel("more", "more");
 group(pMore, "output");
 slider(pMore, { id: "r-master", label: "vol", min: 0, max: 1, step: 0.01, get: () => S.master ?? 0.7, set: (v) => { S.master = v; emit("state", S); }, fmt: (x) => x.toFixed(2), random: false });
@@ -349,7 +470,7 @@ buttons(pMore, [
 ]);
 const keysBox = document.createElement("div");
 keysBox.id = "keys";
-const KEY_ROWS = [["Space", "play"], ["N", "next gen"], ["R", "reseed (new seed, new plants)"], ["L", "+ loop: a seeded 4 bar layer from the next bar"], ["C", "clear loops"], ["Shift+R", "reset the plants"], ["A", "arp mode"], ["Up Down", "bpm"], ["1 2 Tab", "plant"], ["Left Right", "preset"], ["M", "norns / wall"], ["B", "blackout"], ["Esc hold 1 s", "panic"], ["H", "hide controls"], ["F", "full screen"], ["W S D", "kodama phase (?kodama=1)"], ["E", "engine"]];
+const KEY_ROWS = [["Space", "play"], ["N", "next gen"], ["R", "reseed (new seed, new plants)"], ["L", "+ loop: a seeded 4 bar layer from the next bar"], ["C", "clear loops"], ["Shift+R", "reset the plants"], ["A", "arp mode"], ["Up Down", "bpm"], ["1 2 Tab", "plant"], ["Left Right", "preset"], ["M", "norns / wall"], ["B", "blackout"], ["Esc hold 1 s", "panic"], ["H", "hide controls"], ["F", "full screen"], ["W S D", "kodama phase (?kodama=1)"], ["E", "engine"], ["[ ]", "setup"]];
 const keysTable = document.createElement("table");
 for (const [k, d] of KEY_ROWS) { const tr = keysTable.insertRow(); tr.insertCell().textContent = k; tr.insertCell().textContent = d; }
 keysBox.appendChild(keysTable);
@@ -379,6 +500,7 @@ function hudUpdate() {
   $("b-play").classList.toggle("on", S.playing);
   if ($("b-play").textContent !== (S.playing ? "stop" : "play")) $("b-play").textContent = S.playing ? "stop" : "play";
   if ($("b-mode").textContent !== S.mode) $("b-mode").textContent = S.mode;
+  if ($("b-engine").textContent !== G.engineMode) $("b-engine").textContent = G.engineMode;
   const m = S.outDb > -60 ? (S.outDb + 60) / 60 : 0;
   $("meter").firstChild.style.transform = `scaleY(${S.audio ? Math.min(1, m).toFixed(3) : 0})`;
   refreshAll();
@@ -550,3 +672,13 @@ S.master = S.master ?? 0.7;
 if (q.get("score") === "1") import("./score-page.js").then((m) => m.init({ S, act, q, on })).catch((e) => console.warn("score", e));
 if (S.flags.kodama) import("./kodama.js").then((m) => m.init({ S, act })).catch((e) => console.warn("kodama", e));
 emit("state", S);
+
+// a share link: #s=<base64url of the compressed setup>
+async function loadFromHash() {
+  const m = location.hash.match(/^#s=(.+)$/);
+  if (!m) return;
+  try { act.loadSetup(await decodeSetup(m[1]), { now: true }); say("link loaded"); }
+  catch (e) { say("link not readable"); }
+}
+window.addEventListener("hashchange", loadFromHash);
+await loadFromHash();
