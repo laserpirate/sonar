@@ -702,7 +702,7 @@ for (const [k, d] of KEY_ROWS) { const tr = keysTable.insertRow(); tr.insertCell
 keysBox.appendChild(keysTable);
 pMore.appendChild(keysBox);
 const demosLink = document.createElement("div"); demosLink.className = "note";
-demosLink.innerHTML = '<a href="demos/">demos</a>';
+demosLink.innerHTML = '<a href="demos/">demos</a> · <a href="card/">key card</a>';
 pMore.appendChild(demosLink);
 // ------------------------------------------------------------------ bus: sonar drives the visuals (bus.js), VANA drives the roots (vana.js)
 const bus = createBus({ link });

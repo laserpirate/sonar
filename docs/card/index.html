@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>sonar keys</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jost:wght@400;500&display=swap">
+<style>
+  :root { --black: #07090e; --kodama: #3e466b; --water: #2E4A8C; --water-hi: #9FC8F0; --ink: #d8e4f2; --dim: #8c99b5; }
+  html, body { margin: 0; background: var(--black); color: var(--ink); font: 15px/1.35 "Jost", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 24px 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px 28px; }
+  h1 { grid-column: 1 / -1; font-weight: 500; font-size: 22px; margin: 0; }
+  section h2 { font-weight: 500; font-size: 15px; margin: 0 0 4px; border-bottom: 2px solid var(--kodama); padding-bottom: 2px; }
+  table { border-collapse: collapse; width: 100%; }
+  td { padding: 2px 8px 2px 0; vertical-align: top; }
+  td:first-child { white-space: nowrap; width: 1%; }
+  kbd { font: inherit; font-weight: 500; border: 1.5px solid var(--kodama); border-radius: 0; padding: 0 5px; display: inline-block; min-width: 1.2em; text-align: center; }
+  .dim { color: var(--dim); }
+  @media print {
+    @page { size: letter landscape; margin: 0.4in; }
+    html, body { background: #fff; color: #000; font-size: 11pt; }
+    main { max-width: none; padding: 0; grid-template-columns: 1fr 1fr 1fr; gap: 6pt 18pt; }
+    h1 { font-size: 14pt; }
+    section h2 { font-size: 11pt; border-bottom: 1.5pt solid #000; }
+    kbd { border: 1pt solid #000; }
+    .dim { color: #000; }
+    section { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>sonar · keys, gestures, MIDI</h1>
+  <section>
+    <h2>play</h2>
+    <table>
+      <tr><td><kbd>Space</kbd></td><td>play, stop</td></tr>
+      <tr><td><kbd>N</kbd></td><td>next generation</td></tr>
+      <tr><td><kbd>R</kbd></td><td>reseed (live: reset)</td></tr>
+      <tr><td><kbd>Shift</kbd> <kbd>R</kbd></td><td>reset the plants</td></tr>
+      <tr><td><kbd>L</kbd> <kbd>C</kbd></td><td>add a loop, clear loops</td></tr>
+      <tr><td><kbd>A</kbd></td><td>arp mode</td></tr>
+      <tr><td><kbd>Up</kbd> <kbd>Down</kbd></td><td>bpm</td></tr>
+      <tr><td><kbd>E</kbd></td><td>engine</td></tr>
+    </table>
+  </section>
+  <section>
+    <h2>plants and setups</h2>
+    <table>
+      <tr><td><kbd>1</kbd> <kbd>2</kbd> <kbd>Tab</kbd></td><td>plant</td></tr>
+      <tr><td><kbd>Left</kbd> <kbd>Right</kbd></td><td>preset</td></tr>
+      <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>factory setup</td></tr>
+      <tr><td><kbd>G</kbd></td><td>cue go</td></tr>
+      <tr><td><kbd>Shift</kbd> <kbd>G</kbd></td><td>cue back</td></tr>
+      <tr><td><kbd>W</kbd> <kbd>S</kbd> <kbd>D</kbd></td><td>kodama phase <span class="dim">(?kodama=1)</span></td></tr>
+    </table>
+  </section>
+  <section>
+    <h2>show</h2>
+    <table>
+      <tr><td><kbd>B</kbd></td><td>blackout</td></tr>
+      <tr><td><kbd>Esc</kbd> held 1 s</td><td>panic; hold again to leave</td></tr>
+      <tr><td><kbd>H</kbd></td><td>hide controls</td></tr>
+      <tr><td><kbd>F</kbd></td><td>full screen</td></tr>
+      <tr><td><kbd>M</kbd></td><td>norns, wall</td></tr>
+      <tr><td><kbd>?</kbd></td><td>key list</td></tr>
+    </table>
+  </section>
+  <section>
+    <h2>stage gestures</h2>
+    <table>
+      <tr><td>tap</td><td>select a plant; on empty stage, bring controls back</td></tr>
+      <tr><td>drag a plant</td><td>sideways angle, up and down length</td></tr>
+      <tr><td>two-finger tap</td><td>next generation</td></tr>
+      <tr><td>long press</td><td>plant palette</td></tr>
+    </table>
+  </section>
+  <section>
+    <h2>MIDI, v0.2.0 map (default)</h2>
+    <table>
+      <tr><td>note 36</td><td>play, stop</td></tr>
+      <tr><td>note 37, 38</td><td>next generation, reseed</td></tr>
+      <tr><td>note 41</td><td>blackout</td></tr>
+      <tr><td>note 42</td><td>panic</td></tr>
+      <tr><td>CC 1, 4, 7</td><td>bpm 40 to 160, angle 0 to 120, volume</td></tr>
+    </table>
+  </section>
+  <section>
+    <h2>MIDI, nanoKONTROL map <span class="dim">(verify with the wizard)</span></h2>
+    <table>
+      <tr><td>strip 1</td><td>fader morph, knob flourish, upper next setup, lower blackout</td></tr>
+      <tr><td>strip 6</td><td>fader volume</td></tr>
+      <tr><td>play, stop</td><td>play, stop</td></tr>
+      <tr><td>rewind, fast forward</td><td>setup back, next</td></tr>
+      <tr><td>loop</td><td>add a loop</td></tr>
+      <tr><td>REC held 1 s</td><td>panic</td></tr>
+    </table>
+  </section>
+</main>
+</body>
+</html>

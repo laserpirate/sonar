@@ -1,6 +1,7 @@
 // render_garden.mjs · offline renders of the sim garden to MP3 (software render, not the norns).
 //   node tools/render_garden.mjs <out.mp3> '<json opts>'
 //   e.g. node tools/render_garden.mjs docs/demos/x.mp3 '{"seed":42,"seconds":90,"layers":[{"seed":7,"atBeat":16}]}'
+//   "cuesFactory": [[bar, "s03"], ...] loads factory setups (docs/js/setups.json) at those bars, the first as the start
 // Runs docs/js/garden-offline.js in headless Chromium (Playwright from tests/node_modules)
 // against tools/serve.mjs, takes 16-bit PCM back and encodes with ffmpeg (192 kbps, title tag only).
 import { createRequire } from "node:module";
@@ -26,9 +27,14 @@ try {
   const r = await page.evaluate(async (opts) => {
     const { renderGarden, levels, pcm16base64 } = await import("./js/garden-offline.js");
     const catalog = await (await fetch("./js/catalog.json")).json();
+    if (opts.cuesFactory) {
+      const factory = await (await fetch("./js/setups.json")).json(), byId = (id) => factory.find((f) => f.id === id);
+      opts.setup = byId(opts.cuesFactory[0][1]);
+      opts.cues = opts.cuesFactory.slice(1).map(([bar, id]) => ({ bar, setup: byId(id) }));
+    }
     const a = await renderGarden(catalog, opts);
     const count = (k) => a.log.filter((e) => e.k === k).length;
-    return { b64: pcm16base64(a.buf), lv: levels(a.buf), notes: count("note"), loops: count("loop"), arp: count("arp"), layers: count("layer"), state: a.state, sr: a.buf.sampleRate };
+    return { b64: pcm16base64(a.buf), lv: levels(a.buf), notes: count("note"), loops: count("loop"), arp: count("arp"), layers: count("layer"), bass: count("bass"), flourish: count("flourish"), chorus: count("chorus"), cues: count("cue"), state: a.state, sr: a.buf.sampleRate };
   }, opts);
   const pcm = Buffer.from(r.b64, "base64");
   const title = `sonar garden seed ${opts.seed ?? 1}, software render, not the norns`;
@@ -38,7 +44,7 @@ try {
     ff.on("exit", (c) => (c === 0 ? res() : rej(new Error("ffmpeg " + c))));
     ff.stdin.end(pcm);
   });
-  console.log(JSON.stringify({ out, kb: Math.round(statSync(out).size / 1024), seconds: opts.seconds || 60, peakDb: +r.lv.peakDb.toFixed(1), rmsDb: +r.lv.rmsDb.toFixed(1), notes: r.notes, loops: r.loops, arp: r.arp, layers: r.layers, state: r.state }));
+  console.log(JSON.stringify({ out, kb: Math.round(statSync(out).size / 1024), seconds: opts.seconds || 60, peakDb: +r.lv.peakDb.toFixed(1), rmsDb: +r.lv.rmsDb.toFixed(1), notes: r.notes, loops: r.loops, arp: r.arp, layers: r.layers, bass: r.bass, flourish: r.flourish, chorus: r.chorus, cues: r.cues, state: r.state }));
 } finally {
   await browser.close();
   server.kill();

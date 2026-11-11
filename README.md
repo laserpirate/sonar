@@ -85,7 +85,7 @@ node tools/serve.mjs --port 8080
 | `&liveaudio=1` | browser audio also in live mode (off: the norns makes the sound) |
 | `&shanshui=1` `&kodama=1` | landscape hooks, below |
 
-Keys: Space play, N next gen, R reseed (live: reset), Shift+R reset, L add a loop, C clear loops, A arp mode, Up and Down bpm, 1 and 2 plant, Left and Right preset, M norns / wall, B blackout, Esc held 1 s panic (last good frame, audio muted; hold again to leave), H hide controls, F full screen, E engine, ? key list.
+Keys: Space play, N next gen, R reseed (live: reset), Shift+R reset, L add a loop, C clear loops, A arp mode, Up and Down bpm, 1 and 2 plant, Tab next plant, Left and Right preset, M norns / wall, B blackout, Esc held 1 s panic (last good frame, audio muted; hold again to leave), H hide controls, F full screen, E engine, [ and ] factory setups, G and Shift+G cue go and back, ? key list. A printable card: `docs/card/`.
 
 ### Garden controls (sim)
 
@@ -105,7 +105,42 @@ Keys: Space play, N next gen, R reseed (live: reset), Shift+R reset, L add a loo
 
 Enable (click) starts audio and Web MIDI. Nothing asks for a device before that. After Enable the strip shows the output level (`out -14 dB`) and, when the chain is running but nothing reaches the output for 2 s, a line saying to check the device mute switch, volume and output device.
 
-MIDI default map (AV-STANDARD v02): note 36 play/pause, 37 next gen, 38 reseed, 41 blackout, 42 panic; CC 1 BPM 40..160, CC 4 angle 0..120, CC 7 master. CCs use soft takeover. While blacked out only notes 41 and 42 act.
+MIDI: see MIDI mapping below; with nothing stored the v0.2.0 map is the default.
+
+### Layout and gestures
+
+Wide screens: the stage on the left, the rail (strip, tabs, panels, transport) on the right, 340 px. Phone portrait: the stage on top at 55 percent or more, the rail below; panels scroll inside the rail, so stage and rail never overlap. Short landscape keeps a narrower side rail. Add to Home Screen opens it standalone, without browser bars (`manifest.webmanifest`).
+
+Gestures on the stage, each with a button in the plants tab: tap a plant to select it (an empty tap brings hidden controls back); drag a plant sideways for its angle, up and down for its length; two-finger tap for the next generation; long press for the plant palette.
+
+### Setups and banks
+
+A setup is the whole garden as JSON (`Garden.toSetup`, version 1): seed and RNG state, bpm, key, every plant (preset or user plant, exact sentence, random angles, roots, pitch mode, wildness, density, voice), loops, arps, delays, forest, bass, voices, mixer, reverb and wind, sound references, bank name, randomize seed and the MIDI map. Loading one replays it exactly (same notes at the same beats). The setups tab: twelve factory setups (`docs/js/setups.json`, `[` and `]` step them), morph 0 to 8 bars, saved slots in this browser, export (`sonar_setup_<name>_v01.json`, `sonar_setups_all_v01.json`, user plants included), import or drop, and a share link (`#s=` plus deflated JSON, at most 64 KB). A setup that fails a check is refused and nothing changes.
+
+A bank is the voices with their settings and the sounds they use. `.sonarbank` is a zip (stored, written by `docs/js/samples.js`): `bank.json` plus the audio files. Export `sonar_bank_<name>_v01.sonarbank`; import or drop it on any browser. Sounds are kept in this browser (IndexedDB) and never uploaded. A setup naming a sound the browser lacks says `missing: <names>; built-in voices play`.
+
+### Voices and space
+
+Each plant routes to a voice: `saw`, `rain` (the two engines, within 0.5 dB of v0.2.0, `tests/logs/levels_v020.json`), `pluck` (Karplus-Strong), `sine` (two-operator FM bell), `water` (band-passed noise bursts at the note) or a sound added from a file (`smp n`: root note, start, length, attack, release, loop, reverse, tune; pitch by playback rate). Every voice has level, octave, detune, tremolo and its own delay; solo and mute per voice. `reverb` is a shared send through a generated impulse (amount, size); `wind` is low-passed pink noise (level, tone). Per plant: pitch mode `flora` or `walk`, wildness (seeded jitter on the drawn turns, 0 to 60 percent) and density (chance a note sounds). `randomize` sets every marked control inside its range from one seed, which rides in the setup; `kill` latches silence while the garden keeps drawing.
+
+### Forest, roots and conductor
+
+The forest tab grows 2 to 16 plants on one ground line; plants 1 and 2 play exactly as in v0.2.0, plants 3 to 16 draw from their own seeded streams. With three or more plants a conductor keeps the voices sounding at once under a budget (1 to 16), rotates 1 to 4 lead plants per bar and places the rest as a chorus on an eighth-note grid. Roots (taproot, plate, fibrous, rhizome, ericaceous; depth, spread, density) draw below the ground; their tips are the bass, walking root, fifth, root, third of the scale on every 4th, 6th or 8th canopy note (or free), with a quiet drone on the root. A user plant comes from the editor (flora's alphabet `FGf+-[]!|r` and `ABMOPTXYp`, axiom up to 40, five rules up to 80) and lives in the palette.
+
+### MIDI mapping
+
+The midi tab lists every control and every page act with its binding. Learn arms one; the next CC or note binds it (a CC on a slider binds as absolute with soft takeover; a note on a toggle as toggle; panic always as hold 1000 ms). Bindings are `{act, type, ch, num, mode, hold_ms, smooth, curve}`; modes cc `abs` `rel` `trig` `hold`, note `trig` `toggle` `momentary` `hold`. A message bound to two acts is shown as a conflict. Clear one, clear all (asks twice), export `av-bindings_sonar_v01.json`, import. Maps ship in `docs/data/midi-maps/`: `sonar_v020-notes_v01.json` (the default: notes 36 play, 37 next gen, 38 reseed, 41 blackout, 42 panic; CC 1 bpm 40 to 160, CC 4 angle 0 to 120, CC 7 volume) and `sonar_nanokontrol_v01.json` (original nanoKONTROL, scene 1 factory CCs, not checked on the device: verify with the wizard; strip 1 fader morph, knob flourish, upper button next setup, lower button blackout; strip 6 fader volume; play, stop, rewind and fast forward step setups, loop adds a loop, REC held 1 s is panic). Bindings are stored per browser (per `?i=`) and ride in setups. While blacked out only blackout and panic act; both skip every queue. MIDI out (off by default): notes to a chosen output, saw 1, rain 2, pluck 3, sine 4, water 5, bass 6, sounds 7; clock out at 24 ppqn; clock in sets bpm. Without Web MIDI (iPhone Safari) the tab says so and the rest works.
+
+### Macros, record, cues
+
+Four macros in the more tab, each 0 until moved: `weather` (reverb, wind, wind tone, delay feedback), `depth` (roots depth, bass level, drone), `motion` (bpm 60 to 140, flourish, arp gate), `density` (forest density, plant density). They go on the bus and map to MIDI like any slider. `rec` writes the output as `sonar_take_<date-time>_v01.webm` with the setup beside it as `.json`; `rec video` writes the stage and the output. Cues (setups tab) pin setups to bars with their morph; `run` plays the list from the next bar, `go` and `back` (G, Shift+G, or a MIDI button) step it; `sonar_cues_v01.json` exports it.
+
+| URL | does |
+| --- | --- |
+| `#s=<link>` | load a shared setup |
+| `&bus=1` | bus on at load |
+| `&vana=1` | VANA in on at load |
+| `&i=<name>` | a separate MIDI map for this instance |
 
 ## Browser engines
 
@@ -128,7 +163,7 @@ MIDI default map (AV-STANDARD v02): note 36 play/pause, 37 next gen, 38 reseed, 
 | `garden_seed42_arp-up-16_2oct_delay045_bpm100_software-render_v01.mp3` | arp up at 1/16 over 2 octaves, one loop at bar 4, delay 0.45, 100 bpm |
 | `garden_seed42_growth2_c3-major-pentatonic_arp-updown-8_software-render_v01.mp3` | growth every 2 bars, C3 major pentatonic, arp updown 1/8, one loop at bar 8, 84 bpm |
 
-`tools/render_garden_demos.sh` renders the four garden demos.
+`tools/render_garden_demos.sh` renders the four garden demos. v03 demos (`node tools/render_v03_demos.mjs`, 90 s each, `docs/demos/index.html` lists them): two engines with their own arps and delays, a 16-plant forest at budget 6, pluck, sine, water, a cue list of three factory setups, taproot roots with the bass, flourish, reverb and wind. No sampler demo: no sound ships in the repo.
 
 ## Score
 
@@ -237,6 +272,10 @@ When nothing arrives for `stale` ms, every value returns to rest and `rest` fire
 | `tools/catalog_js.mjs [--check]` | `catalog.js` from `catalog.json` |
 | `tools/shanshui_tags.mjs <upstream-engine.js>` | planner tags per chunk from the upstream engine |
 | `tools/privacy_grep.py` | gate before every commit |
+| `tools/garden_check.mjs` | the garden in Node: arps, Euclid, flourish, setups round trip, forest, roots, plant options |
+| `tools/midimap_check.mjs` | MIDI binding modes, takeover, curves, smoothing, conflicts, bad input |
+| `tools/compare_v020.mjs` | saw and rain against the v0.2.0 tag, offline in installed Chrome |
+| `tools/render_v03_demos.mjs` | the v03 demos |
 | `tools/fork_upstream.py`, `tools/apply_hooks.py` | regenerate the fork from `upstream/`, every replace counted |
 
 Not verified on real hardware: the norns, SuperCollider class loading, `;install`, a MIDI controller, a projector.
